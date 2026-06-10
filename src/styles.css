@@ -286,6 +286,12 @@ button:disabled {
 /* larger touch targets on touch devices */
 
 @media (pointer: coarse) {
+  .section-eye {
+    width: 32px;
+    height: 32px;
+    margin: -8px -8px -8px 0;
+  }
+
   .slider-row input[type="range"] {
     height: 30px;
   }
@@ -315,11 +321,52 @@ button:disabled {
 }
 
 .section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 8px 12px;
   font-weight: 700;
   letter-spacing: 0.1em;
   font-size: 12px;
   border-bottom: 1px solid var(--panel-edge);
+}
+
+/* ---- per-section eye: bypass the section's edits for a before/after ---- */
+
+.section-eye {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -6px -6px -6px 0; /* don't grow the header */
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--muted);
+}
+
+.section-eye:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.section-eye:disabled {
+  opacity: 0.45;
+}
+
+.section.bypassed {
+  border-left-color: var(--panel-edge);
+}
+
+.section.bypassed .slider-row {
+  pointer-events: none; /* also blocks the dblclick-to-reset */
+}
+
+.section.bypassed .slider-label,
+.section.bypassed .slider-value {
+  opacity: 0.45;
 }
 
 /* ---- slider rows ---- */

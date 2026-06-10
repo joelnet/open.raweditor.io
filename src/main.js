@@ -42,7 +42,7 @@ function queueRender() {
   renderQueued = true;
   requestAnimationFrame(() => {
     renderQueued = false;
-    const settings = store.get();
+    const settings = panel.effectiveSettings(store.get());
     renderer.render(settings);
     if (histo.visible()) histo.draw(renderer.computeHistogram(settings));
   });
@@ -94,6 +94,7 @@ async function openFile(file) {
     currentFile = file;
     canvas.hidden = false;
     dropzone.setVisible(false);
+    panel.resetBypass();
     store.set({ ...ZERO_SETTINGS });
     layout();
     panel.setEnabled(true);
@@ -125,7 +126,7 @@ async function openFile(file) {
 async function onExport(format) {
   if (!currentFile || opening) return;
   const file = currentFile;
-  const settings = store.get();
+  const settings = panel.effectiveSettings(store.get());
   panel.setExportBusy(true, format);
   try {
     status.setProgress("Export: decoding full resolution…");
@@ -162,7 +163,10 @@ async function onExport(format) {
 
 // Histogram first so its section sits above the panel's slider sections.
 const histo = initHistogram(panelScroll, viewport, { onToggle: queueRender });
-const panel = buildPanel(panelScroll, store, { onExport });
+const panel = buildPanel(panelScroll, store, {
+  onExport,
+  onBypassChange: queueRender,
+});
 const dropzone = initDropzone({
   onFile: openFile,
   onReject: (name) =>

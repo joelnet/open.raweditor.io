@@ -5,6 +5,19 @@
 
 import { SECTIONS } from "../state.js";
 
+const EYE_OPEN =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.4" aria-hidden="true">' +
+  '<path d="M1.5 8s2.5-4.2 6.5-4.2S14.5 8 14.5 8 12 12.2 8 12.2 1.5 8 1.5 8Z"/>' +
+  '<circle cx="8" cy="8" r="2.1"/></svg>';
+
+const EYE_CLOSED =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.4" aria-hidden="true">' +
+  '<path d="M1.5 8s2.5-4.2 6.5-4.2S14.5 8 14.5 8 12 12.2 8 12.2 1.5 8 1.5 8Z"/>' +
+  '<circle cx="8" cy="8" r="2.1"/>' +
+  '<line x1="2.5" y1="13.5" x2="13.5" y2="2.5"/></svg>';
+
 /**
  * @param {string} tag
  * @param {string} [className]
@@ -20,18 +33,55 @@ function el(tag, className, text) {
 /**
  * @param {HTMLElement} container scrollable column the sections render into
  * @param {import("../state.js").Store} store
- * @param {{ onExport: (format: "png" | "jpeg") => void }} handlers
+ * @param {{ onExport: (format: "png" | "jpeg") => void,
+ *           onBypassChange: () => void }} handlers
  */
-export function buildPanel(container, store, { onExport }) {
+export function buildPanel(container, store, { onExport, onBypassChange }) {
   /** @type {Map<string, { input: HTMLInputElement, value: HTMLElement,
    *                        decimals: number, scale: number }>} */
   const rows = new Map();
+
+  // Sections whose eye is toggled off: sliders keep their values but are
+  // treated as zero by effectiveSettings(), giving a before/after preview.
+  /** @type {Set<string>} */
+  const bypassed = new Set();
+  /** @typedef {{ title: string, section: HTMLElement, eye: HTMLButtonElement,
+   *              inputs: HTMLInputElement[] }} SectionEntry */
+  /** @type {SectionEntry[]} */
+  const entries = [];
+  let panelEnabled = false;
+
+  /** @param {SectionEntry} entry @param {boolean} off */
+  function setBypassed(entry, off) {
+    if (off) bypassed.add(entry.title);
+    else bypassed.delete(entry.title);
+    entry.section.classList.toggle("bypassed", off);
+    entry.eye.innerHTML = off ? EYE_CLOSED : EYE_OPEN;
+    entry.eye.setAttribute("aria-pressed", String(!off));
+    for (const input of entry.inputs) input.disabled = !panelEnabled || off;
+  }
 
   /** @type {HTMLElement[]} */
   const sections = [];
   for (const { title, sliders } of SECTIONS) {
     const section = el("div", "section");
-    section.append(el("div", "section-header", title));
+    const header = el("div", "section-header", title);
+    const eye = /** @type {HTMLButtonElement} */ (el("button", "section-eye"));
+    eye.type = "button";
+    eye.disabled = true;
+    eye.innerHTML = EYE_OPEN;
+    eye.setAttribute("aria-label", `Toggle ${title.toLowerCase()} edits`);
+    eye.setAttribute("aria-pressed", "true");
+    header.append(eye);
+    section.append(header);
+
+    /** @type {SectionEntry} */
+    const entry = { title, section, eye, inputs: [] };
+    entries.push(entry);
+    eye.addEventListener("click", () => {
+      setBypassed(entry, !bypassed.has(title));
+      onBypassChange();
+    });
 
     for (const def of sliders) {
       const row = el("div", "slider-row");
@@ -55,6 +105,7 @@ export function buildPanel(container, store, { onExport }) {
 
       row.append(label, value, input);
       section.append(row);
+      entry.inputs.push(input);
       rows.set(def.key, {
         input,
         value,
@@ -104,9 +155,34 @@ export function buildPanel(container, store, { onExport }) {
   return {
     /** @param {boolean} enabled */
     setEnabled(enabled) {
-      for (const { input } of rows.values()) input.disabled = !enabled;
+      panelEnabled = enabled;
+      for (const entry of entries) {
+        entry.eye.disabled = !enabled;
+        for (const input of entry.inputs) {
+          input.disabled = !enabled || bypassed.has(entry.title);
+        }
+      }
       pngBtn.disabled = !enabled;
       jpgBtn.disabled = !enabled;
+    },
+    /**
+     * Settings with bypassed sections' sliders treated as zero — what the
+     * preview, histogram, and export should actually apply.
+     * @param {import("../tone/tone-math.js").ToneSettings} settings
+     * @returns {import("../tone/tone-math.js").ToneSettings}
+     */
+    effectiveSettings(settings) {
+      if (bypassed.size === 0) return settings;
+      const out = { ...settings };
+      for (const { title, sliders } of SECTIONS) {
+        if (!bypassed.has(title)) continue;
+        for (const def of sliders) out[def.key] = 0;
+      }
+      return out;
+    },
+    /** Re-show all sections' edits (used when a new image is opened). */
+    resetBypass() {
+      for (const entry of entries) setBypassed(entry, false);
     },
     /**
      * @param {boolean} busy
