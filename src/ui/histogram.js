@@ -14,6 +14,25 @@ const CHANNELS = /** @type {const} */ ([
   ["b", "rgb(95, 140, 235)"],
 ]);
 
+// Clip spikes (crushed blacks, blown highlights) pile a huge share of the
+// image into a handful of bins — and tone sliders move them into interior
+// bins (e.g. any nonzero contrast pulls the 1.0 clip mass to ~bin 253), so
+// excluding fixed end bins is not enough. Normalizing to the Kth-largest
+// bin keeps the curve readable: spikes clamp flat against the canvas top,
+// while a smooth histogram's top K bins all sit near its max anyway.
+const SPIKE_BINS = 16;
+
+/** @param {import("../gl/renderer.js").HistogramBins} bins */
+function normHeight(bins) {
+  const all = new Uint32Array(BINS * 3);
+  all.set(bins.r, 0);
+  all.set(bins.g, BINS);
+  all.set(bins.b, BINS * 2);
+  all.sort();
+  const kth = all[all.length - SPIKE_BINS];
+  return kth > 0 ? kth : Math.max(all[all.length - 1], 1);
+}
+
 /**
  * @param {HTMLCanvasElement} canvas
  * @param {import("../gl/renderer.js").HistogramBins | null} bins
@@ -26,23 +45,7 @@ function drawInto(canvas, bins) {
   ctx.clearRect(0, 0, w, h);
   if (!bins) return;
 
-  // Normalize to the tallest interior bin; the clipped-end spikes at 0 and
-  // 255 would otherwise flatten everything else.
-  let max = 0;
-  for (let i = 1; i < BINS - 1; i++) {
-    max = Math.max(max, bins.r[i], bins.g[i], bins.b[i]);
-  }
-  if (max === 0) {
-    max = Math.max(
-      bins.r[0],
-      bins.g[0],
-      bins.b[0],
-      bins.r[BINS - 1],
-      bins.g[BINS - 1],
-      bins.b[BINS - 1],
-      1,
-    );
-  }
+  const max = normHeight(bins);
 
   ctx.globalCompositeOperation = "screen";
   for (const [key, color] of CHANNELS) {
