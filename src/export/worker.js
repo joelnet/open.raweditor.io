@@ -1,6 +1,6 @@
 // Export worker: applies the tone pipeline (pure JS mirror of the preview
-// shader) to full-resolution decoded data and encodes a PNG. Runs off the
-// main thread; posts row progress between chunks.
+// shader) to full-resolution decoded data and encodes a PNG or JPEG. Runs
+// off the main thread; posts row progress between chunks.
 
 import { toneMapRows } from "../tone/tone-math.js";
 
@@ -9,7 +9,7 @@ const CHUNK_ROWS = 256;
 const ctx = /** @type {any} */ (self);
 
 ctx.onmessage = async (/** @type {MessageEvent} */ e) => {
-  const { image, settings } = e.data;
+  const { image, settings, format } = e.data;
   try {
     const { width, height } = image;
     const out = new Uint8ClampedArray(width * height * 4);
@@ -22,7 +22,11 @@ ctx.onmessage = async (/** @type {MessageEvent} */ e) => {
     const c2d = canvas.getContext("2d");
     if (!c2d) throw new Error("OffscreenCanvas 2d context unavailable");
     c2d.putImageData(new ImageData(out, width, height), 0, 0);
-    const blob = await canvas.convertToBlob({ type: "image/png" });
+    const blob = await canvas.convertToBlob(
+      format === "jpeg"
+        ? { type: "image/jpeg", quality: 0.92 }
+        : { type: "image/png" },
+    );
     ctx.postMessage({ type: "done", blob });
   } catch (err) {
     ctx.postMessage({

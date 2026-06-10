@@ -117,9 +117,43 @@ button:disabled {
   flex-shrink: 0;
   background: var(--bg);
   border-left: 1px solid var(--panel-edge);
+  display: flex;
+}
+
+#panel-scroll {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+}
+
+/* ---- elevator: touch scroll rail (coarse pointers only) ---- */
+
+#elevator {
+  display: none;
+  flex: 0 0 24px;
+  position: relative;
+  border-left: 1px solid var(--panel-edge);
+  touch-action: none; /* keep rail drags from scrolling the page */
+}
+
+#elevator .elevator-thumb {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  border-radius: 7px;
+  background: var(--muted);
+}
+
+#elevator.dragging .elevator-thumb {
+  background: var(--accent-blue);
+}
+
+@media (pointer: coarse) {
+  #elevator:not(.hidden) {
+    display: block;
+  }
 }
 
 /* ---- split divider (mobile only) ---- */
@@ -303,8 +337,14 @@ button:disabled {
   gap: 6px;
 }
 
-.export-body button {
-  width: 100%;
+.export-row {
+  display: flex;
+  gap: 6px;
+}
+
+.export-row button {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ---- status bar ---- */

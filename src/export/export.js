@@ -1,4 +1,4 @@
-// Main-thread side of PNG export: hands the full-res decode to the export
+// Main-thread side of image export: hands the full-res decode to the export
 // worker, reports progress, returns the encoded Blob.
 
 export function createExporter() {
@@ -7,15 +7,16 @@ export function createExporter() {
 
   return {
     /**
-     * Tone-map and PNG-encode a decoded image. The image's pixel buffer is
+     * Tone-map and encode a decoded image. The image's pixel buffer is
      * transferred (detached) — the caller must not reuse it.
      * @param {{ data: Uint16Array | Uint8Array, width: number, height: number,
      *           colors: number, bits: number }} image
      * @param {import("../tone/tone-math.js").ToneSettings} settings
+     * @param {"png" | "jpeg"} format
      * @param {(done: number, total: number) => void} [onProgress]
      * @returns {Promise<Blob>}
      */
-    exportPng(image, settings, onProgress) {
+    exportImage(image, settings, format, onProgress) {
       if (!worker) {
         worker = new Worker(new URL("./worker.js", import.meta.url), {
           type: "module",
@@ -32,7 +33,7 @@ export function createExporter() {
         };
         w.onerror = (e) =>
           reject(new Error(e.message || "export worker error"));
-        w.postMessage({ image, settings }, [image.data.buffer]);
+        w.postMessage({ image, settings, format }, [image.data.buffer]);
       });
     },
   };

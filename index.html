@@ -26,7 +26,20 @@
       <div id="divider" role="separator" aria-orientation="horizontal">
         <span class="grip"></span>
       </div>
-      <aside id="sidebar"></aside>
+      <aside id="sidebar">
+        <div id="panel-scroll"></div>
+        <div
+          id="elevator"
+          role="scrollbar"
+          aria-controls="panel-scroll"
+          aria-orientation="vertical"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+        >
+          <div class="elevator-thumb"></div>
+        </div>
+      </aside>
     </main>
     <footer id="statusbar">
       <span id="status-file">No file loaded</span>

@@ -18,11 +18,11 @@ function el(tag, className, text) {
 }
 
 /**
- * @param {HTMLElement} sidebar
+ * @param {HTMLElement} container scrollable column the sections render into
  * @param {import("../state.js").Store} store
- * @param {{ onExport: () => void }} handlers
+ * @param {{ onExport: (format: "png" | "jpeg") => void }} handlers
  */
-export function buildPanel(sidebar, store, { onExport }) {
+export function buildPanel(container, store, { onExport }) {
   /** @type {Map<string, { input: HTMLInputElement, value: HTMLElement,
    *                        decimals: number, scale: number }>} */
   const rows = new Map();
@@ -68,15 +68,22 @@ export function buildPanel(sidebar, store, { onExport }) {
   const exportSection = el("div", "section section-export");
   exportSection.append(el("div", "section-header", "EXPORT"));
   const exportBody = el("div", "export-body");
-  const exportBtn = /** @type {HTMLButtonElement} */ (
+  const exportRow = el("div", "export-row");
+  const pngBtn = /** @type {HTMLButtonElement} */ (
     el("button", "", "Export PNG")
   );
-  exportBtn.disabled = true;
-  exportBtn.addEventListener("click", onExport);
-  exportBody.append(exportBtn);
+  const jpgBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Export JPG")
+  );
+  pngBtn.disabled = true;
+  jpgBtn.disabled = true;
+  pngBtn.addEventListener("click", () => onExport("png"));
+  jpgBtn.addEventListener("click", () => onExport("jpeg"));
+  exportRow.append(pngBtn, jpgBtn);
+  exportBody.append(exportRow);
   exportSection.append(exportBody);
 
-  sidebar.append(...sections, exportSection);
+  container.append(...sections, exportSection);
 
   store.subscribe((state) => {
     for (const [key, row] of rows) {
@@ -98,12 +105,20 @@ export function buildPanel(sidebar, store, { onExport }) {
     /** @param {boolean} enabled */
     setEnabled(enabled) {
       for (const { input } of rows.values()) input.disabled = !enabled;
-      exportBtn.disabled = !enabled;
+      pngBtn.disabled = !enabled;
+      jpgBtn.disabled = !enabled;
     },
-    /** @param {boolean} busy */
-    setExportBusy(busy) {
-      exportBtn.disabled = busy;
-      exportBtn.textContent = busy ? "Exporting…" : "Export PNG";
+    /**
+     * @param {boolean} busy
+     * @param {"png" | "jpeg"} [format] which export is running
+     */
+    setExportBusy(busy, format) {
+      pngBtn.disabled = busy;
+      jpgBtn.disabled = busy;
+      pngBtn.textContent =
+        busy && format === "png" ? "Exporting…" : "Export PNG";
+      jpgBtn.textContent =
+        busy && format === "jpeg" ? "Exporting…" : "Export JPG";
     },
   };
 }

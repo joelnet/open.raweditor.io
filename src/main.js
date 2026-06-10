@@ -6,6 +6,7 @@ import { ZERO_SETTINGS } from "./tone/tone-math.js";
 import { buildPanel } from "./ui/panel.js";
 import { initDropzone } from "./ui/dropzone.js";
 import { initDivider } from "./ui/divider.js";
+import { initElevator } from "./ui/elevator.js";
 import { createStatus } from "./ui/status.js";
 import { createExporter, downloadBlob } from "./export/export.js";
 
@@ -15,7 +16,9 @@ const canvas = /** @type {HTMLCanvasElement} */ (
 const viewport = /** @type {HTMLElement} */ (
   document.getElementById("viewport")
 );
-const sidebar = /** @type {HTMLElement} */ (document.getElementById("sidebar"));
+const panelScroll = /** @type {HTMLElement} */ (
+  document.getElementById("panel-scroll")
+);
 
 const status = createStatus();
 const store = createStore();
@@ -114,25 +117,32 @@ async function openFile(file) {
 
 // --- export ---
 
-async function onExport() {
+/** @param {"png" | "jpeg"} format */
+async function onExport(format) {
   if (!currentFile || opening) return;
   const file = currentFile;
   const settings = store.get();
-  panel.setExportBusy(true);
+  panel.setExportBusy(true, format);
   try {
     status.setProgress("Export: decoding full resolution…");
     const bytes = new Uint8Array(await file.arrayBuffer());
     const { image } = await decoder.decode(bytes, {});
     status.setProgress("Export: applying tone…");
-    const blob = await exporter.exportPng(image, settings, (done, total) => {
-      status.setProgress(
-        `Export: applying tone… ${Math.round((done / total) * 100)}%`,
-      );
-    });
-    const base = file.name.replace(/\.[^.]+$/, "");
-    downloadBlob(blob, `${base}.png`);
+    const blob = await exporter.exportImage(
+      image,
+      settings,
+      format,
+      (done, total) => {
+        status.setProgress(
+          `Export: applying tone… ${Math.round((done / total) * 100)}%`,
+        );
+      },
+    );
+    const name =
+      file.name.replace(/\.[^.]+$/, "") + (format === "jpeg" ? ".jpg" : ".png");
+    downloadBlob(blob, name);
     status.setProgress(
-      `Exported ${base}.png (${image.width}×${image.height}, ${(blob.size / 1e6).toFixed(1)}MB)`,
+      `Exported ${name} (${image.width}×${image.height}, ${(blob.size / 1e6).toFixed(1)}MB)`,
     );
   } catch (err) {
     console.error(err);
@@ -146,13 +156,14 @@ async function onExport() {
 
 // --- wiring ---
 
-const panel = buildPanel(sidebar, store, { onExport });
+const panel = buildPanel(panelScroll, store, { onExport });
 const dropzone = initDropzone({
   onFile: openFile,
   onReject: (name) =>
     status.setError(`${name} is not a supported RAW file (.ARW, .RAF)`),
 });
 initDivider({ onResize: layout });
+initElevator();
 
 if (!renderer) {
   status.setError("WebGL2 is not available in this browser — cannot preview.");
