@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "module": "node16",
+    "moduleResolution": "node16",
+    "target": "es2022",
+    "skipLibCheck": true,
+    "types": ["node"],
+    "allowJs": true,
+    "maxNodeModuleJsDepth": 0
+  },
+  "include": ["server/**/*.js"],
+  "exclude": ["node_modules", "**/node_modules/**", "dist", "**/__tests__/**"]
+}

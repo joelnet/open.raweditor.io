@@ -1,0 +1,97 @@
+// Minimal observable store for tone settings plus the slider definitions
+// the panel is generated from. Store values are pre-scaled: exposure in EV,
+// everything else in [-1, +1] — the contract shared by the GLSL uniforms
+// and tone-math.js.
+
+import { ZERO_SETTINGS } from "./tone/tone-math.js";
+
+/**
+ * @typedef {import("./tone/tone-math.js").ToneSettings} ToneSettings
+ * @typedef {keyof ToneSettings} SliderKey
+ */
+
+export const SLIDERS = /** @type {const} */ ([
+  {
+    key: "exposure",
+    label: "EXPOSURE",
+    min: -5,
+    max: 5,
+    step: 0.05,
+    scale: 1,
+    decimals: 2,
+  },
+  {
+    key: "contrast",
+    label: "CONTRAST",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "highlights",
+    label: "HIGHLIGHTS",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "shadows",
+    label: "SHADOWS",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "whites",
+    label: "WHITES",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "blacks",
+    label: "BLACKS",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+]);
+
+export function createStore() {
+  /** @type {ToneSettings} */
+  const state = { ...ZERO_SETTINGS };
+  /** @type {Set<(state: ToneSettings) => void>} */
+  const listeners = new Set();
+
+  return {
+    /** @returns {ToneSettings} */
+    get() {
+      return { ...state };
+    },
+    /** @param {Partial<ToneSettings>} patch */
+    set(patch) {
+      Object.assign(state, patch);
+      for (const fn of listeners) fn({ ...state });
+    },
+    /**
+     * @param {(state: ToneSettings) => void} fn
+     * @returns {() => void} unsubscribe
+     */
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+}
+
+/** @typedef {ReturnType<typeof createStore>} Store */

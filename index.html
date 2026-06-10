@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RAW Editor</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="viewport">
+        <canvas id="preview" hidden></canvas>
+        <div id="dropzone">
+          <p class="dz-title">DROP RAW FILE</p>
+          <p class="dz-hint">Sony .ARW &middot; Fujifilm .RAF</p>
+          <button id="pick-file" type="button">Browse&hellip;</button>
+          <input
+            id="file-input"
+            type="file"
+            accept=".arw,.raf"
+            hidden
+            aria-label="Choose a RAW file"
+          />
+        </div>
+      </section>
+      <div id="divider" role="separator" aria-orientation="horizontal">
+        <span class="grip"></span>
+      </div>
+      <aside id="sidebar"></aside>
+    </main>
+    <footer id="statusbar">
+      <span id="status-file">No file loaded</span>
+      <span id="status-progress"></span>
+    </footer>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
