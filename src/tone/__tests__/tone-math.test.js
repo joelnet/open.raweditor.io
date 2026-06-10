@@ -40,6 +40,36 @@ test("exposure -1 EV equals halving linear input", () => {
   assert.ok(Math.abs(withEv - halved) < EPS);
 });
 
+test("temp +1 warms: red up, blue down, green untouched", () => {
+  const v = 0.18;
+  const [r, g, b] = applyTonePixel(v, v, v, settings({ temp: 1 }));
+  const [base] = applyTonePixel(v, v, v, ZERO_SETTINGS);
+  const up = srgbEncode(v * Math.pow(2, TONE.WB_TEMP_EV));
+  const down = srgbEncode(v * Math.pow(2, -TONE.WB_TEMP_EV));
+  assert.ok(Math.abs(r - up) < EPS);
+  assert.ok(Math.abs(g - base) < EPS);
+  assert.ok(Math.abs(b - down) < EPS);
+});
+
+test("temp -1 cools: blue up, red down", () => {
+  const v = 0.18;
+  const [r, , b] = applyTonePixel(v, v, v, settings({ temp: -1 }));
+  const [base] = applyTonePixel(v, v, v, ZERO_SETTINGS);
+  assert.ok(r < base);
+  assert.ok(b > base);
+});
+
+test("tint moves green: +1 toward magenta, -1 toward green", () => {
+  const v = 0.18;
+  const [base] = applyTonePixel(v, v, v, ZERO_SETTINGS);
+  const [rM, gM, bM] = applyTonePixel(v, v, v, settings({ tint: 1 }));
+  assert.ok(gM < base);
+  assert.ok(Math.abs(rM - base) < EPS);
+  assert.ok(Math.abs(bM - base) < EPS);
+  const [, gG] = applyTonePixel(v, v, v, settings({ tint: -1 }));
+  assert.ok(gG > base);
+});
+
 test("contrast keeps the middle-gray pivot fixed", () => {
   const p = TONE.PIVOT;
   for (const c of [-1, -0.5, 0.5, 1]) {
@@ -102,9 +132,16 @@ test("highlights cut bright pixels, leave dark pixels alone", () => {
 
 test("output stays in [0,1] under extreme settings", () => {
   const extremes = [
-    settings({ exposure: 5, contrast: 1, shadows: 1, blacks: 1 }),
-    settings({ exposure: -5, contrast: -1, highlights: -1, whites: -1 }),
-    settings({ exposure: 5, whites: 1, highlights: 1 }),
+    settings({ exposure: 5, contrast: 1, shadows: 1, blacks: 1, temp: 1 }),
+    settings({
+      exposure: -5,
+      contrast: -1,
+      highlights: -1,
+      whites: -1,
+      temp: -1,
+      tint: 1,
+    }),
+    settings({ exposure: 5, whites: 1, highlights: 1, tint: -1 }),
   ];
   for (const s of extremes) {
     for (const v of [0, 0.18, 1, 4]) {

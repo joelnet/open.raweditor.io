@@ -1,7 +1,8 @@
 // GLSL for the preview path. The fragment shader mirrors tone-math.js
-// step-for-step (exposure → whites/blacks → contrast → highlights/shadows →
-// sRGB encode); constants are interpolated from tone/constants.js so the
-// GPU preview and the CPU export can never drift apart.
+// step-for-step (white balance → exposure → whites/blacks → contrast →
+// highlights/shadows → sRGB encode); constants are interpolated from
+// tone/constants.js so the GPU preview and the CPU export can never drift
+// apart.
 
 import { TONE, INPUT_TRANSFER, LUMA } from "../tone/constants.js";
 
@@ -38,6 +39,8 @@ precision highp float;
 precision highp usampler2D;
 
 uniform usampler2D u_image;     // RGBA16UI, linear light
+uniform float u_temp;           // [-1, 1]
+uniform float u_tint;           // [-1, 1]
 uniform float u_exposure;       // EV
 uniform float u_contrast;       // [-1, 1]
 uniform float u_highlights;     // [-1, 1]
@@ -62,29 +65,36 @@ void main() {
   ivec2 p = clamp(ivec2(v_uv * vec2(ts)), ivec2(0), ts - 1);
   vec3 rgb = decodeInput(vec3(texelFetch(u_image, p, 0).rgb) / 65535.0);
 
-  // 1. exposure
+  // 1. white balance: +temp warms (red up, blue down), +tint goes magenta
+  rgb *= exp2(vec3(
+    ${f(TONE.WB_TEMP_EV)} * u_temp,
+    -${f(TONE.WB_TINT_EV)} * u_tint,
+    -${f(TONE.WB_TEMP_EV)} * u_temp
+  ));
+
+  // 2. exposure
   rgb *= exp2(u_exposure);
 
-  // 2. whites / blacks: levels remap (+whites brightens, +blacks lifts)
+  // 3. whites / blacks: levels remap (+whites brightens, +blacks lifts)
   float white = 1.0 - ${f(TONE.WHITES_RANGE)} * u_whites;
   float black = -${f(TONE.BLACKS_RANGE)} * u_blacks;
   rgb = (rgb - black) / max(white - black, 1e-4);
 
-  // 3. contrast: power curve pivoting on middle gray
+  // 4. contrast: power curve pivoting on middle gray
   rgb = max(rgb, vec3(0.0));
   if (u_contrast != 0.0) {
     float c = u_contrast >= 0.0 ? 1.0 + u_contrast : 1.0 / (1.0 - u_contrast);
     rgb = ${f(TONE.PIVOT)} * pow(rgb / ${f(TONE.PIVOT)}, vec3(c));
   }
 
-  // 4. highlights / shadows: luminance-masked exposure gain
+  // 5. highlights / shadows: luminance-masked exposure gain
   float y = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
   float ye = sqrt(clamp(y, 0.0, 1.0));
   float mS = 1.0 - smoothstep(${f(TONE.SHADOW_MASK[0])}, ${f(TONE.SHADOW_MASK[1])}, ye);
   float mH = smoothstep(${f(TONE.HIGHLIGHT_MASK[0])}, ${f(TONE.HIGHLIGHT_MASK[1])}, ye);
   rgb *= exp2(${f(TONE.SH_STRENGTH_EV)} * (u_shadows * mS + u_highlights * mH));
 
-  // 5. clamp + display encode
+  // 6. clamp + display encode
   outColor = vec4(srgbEncode(clamp(rgb, 0.0, 1.0)), 1.0);
 }
 `;

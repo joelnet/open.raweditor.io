@@ -5,11 +5,14 @@ import { TONE, INPUT_TRANSFER, LUMA } from "./constants.js";
 
 /**
  * Tone settings, all pre-scaled: exposure in EV (±5), the rest in [-1, +1].
- * @typedef {{ exposure: number, contrast: number, highlights: number,
- *             shadows: number, whites: number, blacks: number }} ToneSettings
+ * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
+ *             highlights: number, shadows: number, whites: number,
+ *             blacks: number }} ToneSettings
  */
 
 export const ZERO_SETTINGS = Object.freeze({
+  temp: 0,
+  tint: 0,
   exposure: 0,
   contrast: 0,
   highlights: 0,
@@ -66,13 +69,20 @@ export function decodeInput(v) {
  * @returns {[number, number, number]}
  */
 export function applyTonePixel(r, g, b, s) {
-  // 1. exposure
+  // 1. white balance: +temp warms (red up, blue down), +tint goes magenta
+  if (s.temp !== 0 || s.tint !== 0) {
+    r *= Math.pow(2, TONE.WB_TEMP_EV * s.temp);
+    b *= Math.pow(2, -TONE.WB_TEMP_EV * s.temp);
+    g *= Math.pow(2, -TONE.WB_TINT_EV * s.tint);
+  }
+
+  // 2. exposure
   const m = Math.pow(2, s.exposure);
   r *= m;
   g *= m;
   b *= m;
 
-  // 2. whites / blacks: levels remap (+whites brightens, +blacks lifts)
+  // 3. whites / blacks: levels remap (+whites brightens, +blacks lifts)
   const white = 1 - TONE.WHITES_RANGE * s.whites;
   const black = -TONE.BLACKS_RANGE * s.blacks;
   const range = Math.max(white - black, 1e-4);
@@ -80,7 +90,7 @@ export function applyTonePixel(r, g, b, s) {
   g = (g - black) / range;
   b = (b - black) / range;
 
-  // 3. contrast: power curve pivoting on middle gray
+  // 4. contrast: power curve pivoting on middle gray
   r = Math.max(r, 0);
   g = Math.max(g, 0);
   b = Math.max(b, 0);
@@ -91,7 +101,7 @@ export function applyTonePixel(r, g, b, s) {
     b = TONE.PIVOT * Math.pow(b / TONE.PIVOT, c);
   }
 
-  // 4. highlights / shadows: luminance-masked exposure gain
+  // 5. highlights / shadows: luminance-masked exposure gain
   if (s.shadows !== 0 || s.highlights !== 0) {
     const y = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
     const ye = Math.sqrt(Math.min(Math.max(y, 0), 1));
@@ -106,7 +116,7 @@ export function applyTonePixel(r, g, b, s) {
     b *= gain;
   }
 
-  // 5. clamp + display encode
+  // 6. clamp + display encode
   return [
     srgbEncode(Math.min(Math.max(r, 0), 1)),
     srgbEncode(Math.min(Math.max(g, 0), 1)),

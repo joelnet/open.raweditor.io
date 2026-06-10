@@ -1,8 +1,9 @@
-// Right sidebar: a TONE section generated from the SLIDERS table and an
-// EXPORT section. Aesthetic per the user's reference: colored left accent
-// bars, uppercase monospace headers, green/red value readouts.
+// Right sidebar: slider sections (WHITE BALANCE, TONE) generated from the
+// SECTIONS table and an EXPORT section. Aesthetic per the user's reference:
+// colored left accent bars, uppercase monospace headers, green/red value
+// readouts.
 
-import { SLIDERS } from "../state.js";
+import { SECTIONS } from "../state.js";
 
 /**
  * @param {string} tag
@@ -22,41 +23,46 @@ function el(tag, className, text) {
  * @param {{ onExport: () => void }} handlers
  */
 export function buildPanel(sidebar, store, { onExport }) {
-  const tone = el("div", "section");
-  tone.append(el("div", "section-header", "TONE"));
-
   /** @type {Map<string, { input: HTMLInputElement, value: HTMLElement,
    *                        decimals: number, scale: number }>} */
   const rows = new Map();
 
-  for (const def of SLIDERS) {
-    const row = el("div", "slider-row");
-    const label = el("span", "slider-label", def.label);
-    const value = el("span", "slider-value", "0");
-    const input = /** @type {HTMLInputElement} */ (el("input"));
-    input.type = "range";
-    input.min = String(def.min);
-    input.max = String(def.max);
-    input.step = String(def.step);
-    input.value = "0";
-    input.disabled = true;
-    input.setAttribute("aria-label", def.label.toLowerCase());
+  /** @type {HTMLElement[]} */
+  const sections = [];
+  for (const { title, sliders } of SECTIONS) {
+    const section = el("div", "section");
+    section.append(el("div", "section-header", title));
 
-    input.addEventListener("input", () => {
-      store.set({ [def.key]: input.valueAsNumber * def.scale });
-    });
-    row.addEventListener("dblclick", () => {
-      store.set({ [def.key]: 0 });
-    });
+    for (const def of sliders) {
+      const row = el("div", "slider-row");
+      const label = el("span", "slider-label", def.label);
+      const value = el("span", "slider-value", "0");
+      const input = /** @type {HTMLInputElement} */ (el("input"));
+      input.type = "range";
+      input.min = String(def.min);
+      input.max = String(def.max);
+      input.step = String(def.step);
+      input.value = "0";
+      input.disabled = true;
+      input.setAttribute("aria-label", def.label.toLowerCase());
 
-    row.append(label, value, input);
-    tone.append(row);
-    rows.set(def.key, {
-      input,
-      value,
-      decimals: def.decimals,
-      scale: def.scale,
-    });
+      input.addEventListener("input", () => {
+        store.set({ [def.key]: input.valueAsNumber * def.scale });
+      });
+      row.addEventListener("dblclick", () => {
+        store.set({ [def.key]: 0 });
+      });
+
+      row.append(label, value, input);
+      section.append(row);
+      rows.set(def.key, {
+        input,
+        value,
+        decimals: def.decimals,
+        scale: def.scale,
+      });
+    }
+    sections.push(section);
   }
 
   const exportSection = el("div", "section section-export");
@@ -70,7 +76,7 @@ export function buildPanel(sidebar, store, { onExport }) {
   exportBody.append(exportBtn);
   exportSection.append(exportBody);
 
-  sidebar.append(tone, exportSection);
+  sidebar.append(...sections, exportSection);
 
   store.subscribe((state) => {
     for (const [key, row] of rows) {

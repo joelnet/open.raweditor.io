@@ -3,6 +3,10 @@
 // (preview path) so the two can never drift.
 
 export const TONE = {
+  /** Temp slider ±1 gains red by ±WB_TEMP_EV EV and blue by the opposite. */
+  WB_TEMP_EV: 0.75,
+  /** Tint slider ±1 (toward magenta) gains green by ∓WB_TINT_EV EV. */
+  WB_TINT_EV: 0.5,
   /** Contrast pivot: middle gray in linear light. */
   PIVOT: 0.18,
   /** Whites slider ±1 moves the white point to 1 ∓ WHITES_RANGE. */

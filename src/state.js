@@ -10,7 +10,28 @@ import { ZERO_SETTINGS } from "./tone/tone-math.js";
  * @typedef {keyof ToneSettings} SliderKey
  */
 
-export const SLIDERS = /** @type {const} */ ([
+export const WB_SLIDERS = /** @type {const} */ ([
+  {
+    key: "temp",
+    label: "TEMP",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "tint",
+    label: "TINT",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+]);
+
+export const TONE_SLIDERS = /** @type {const} */ ([
   {
     key: "exposure",
     label: "EXPOSURE",
@@ -65,6 +86,12 @@ export const SLIDERS = /** @type {const} */ ([
     scale: 0.01,
     decimals: 0,
   },
+]);
+
+/** Sidebar sections, in display order. */
+export const SECTIONS = /** @type {const} */ ([
+  { title: "WHITE BALANCE", sliders: WB_SLIDERS },
+  { title: "TONE", sliders: TONE_SLIDERS },
 ]);
 
 export function createStore() {
