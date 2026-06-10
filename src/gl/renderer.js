@@ -33,10 +33,15 @@ function compileShader(gl, type, source) {
 }
 
 /**
+ * @typedef {{ r: Uint32Array, g: Uint32Array, b: Uint32Array }} HistogramBins
+ */
+
+/**
  * @typedef {{
  *   setImage(img: { pixels: Uint16Array, width: number, height: number }): void,
  *   setSize(width: number, height: number): void,
  *   render(settings: import("../tone/tone-math.js").ToneSettings): void,
+ *   computeHistogram(settings: import("../tone/tone-math.js").ToneSettings): HistogramBins | null,
  * }} Renderer
  */
 
@@ -87,6 +92,21 @@ export function createRenderer(canvas) {
 
   let hasImage = false;
 
+  // Histogram readback target: the same shader rendered at thumbnail size.
+  // The shader samples by normalized UV, so a small viewport is a uniform
+  // (unbiased) subsample of the full preview.
+  const HISTO_W = 256;
+  const HISTO_H = 160;
+  /** @type {WebGLFramebuffer | null} */
+  let histoFbo = null;
+  const histoPixels = new Uint8Array(HISTO_W * HISTO_H * 4);
+  /** @type {HistogramBins} */
+  const histoBins = {
+    r: new Uint32Array(256),
+    g: new Uint32Array(256),
+    b: new Uint32Array(256),
+  };
+
   const renderer = {
     /**
      * Upload a preview image (RGBA u16, linear) to the GPU.
@@ -129,6 +149,60 @@ export function createRenderer(canvas) {
         gl.uniform1f(loc[name], settings[name]);
       }
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+    },
+
+    /**
+     * Render at thumbnail size with the given settings and bin the result
+     * into 256-level RGB histograms of the display-referred (sRGB) output.
+     * The returned arrays are reused across calls — consume immediately.
+     * @param {import("../tone/tone-math.js").ToneSettings} settings
+     * @returns {HistogramBins | null} null when no image is loaded
+     */
+    computeHistogram(settings) {
+      if (!hasImage) return null;
+      if (!histoFbo) {
+        const tex = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, HISTO_W, HISTO_H);
+        gl.activeTexture(gl.TEXTURE0);
+        histoFbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, histoFbo);
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0,
+          gl.TEXTURE_2D,
+          tex,
+          0,
+        );
+      } else {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, histoFbo);
+      }
+      gl.viewport(0, 0, HISTO_W, HISTO_H);
+      for (const name of UNIFORMS) {
+        gl.uniform1f(loc[name], settings[name]);
+      }
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.readPixels(
+        0,
+        0,
+        HISTO_W,
+        HISTO_H,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        histoPixels,
+      );
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+      histoBins.r.fill(0);
+      histoBins.g.fill(0);
+      histoBins.b.fill(0);
+      for (let i = 0; i < histoPixels.length; i += 4) {
+        histoBins.r[histoPixels[i]]++;
+        histoBins.g[histoPixels[i + 1]]++;
+        histoBins.b[histoPixels[i + 2]]++;
+      }
+      return histoBins;
     },
   };
   return renderer;

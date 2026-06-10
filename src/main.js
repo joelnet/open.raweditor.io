@@ -4,6 +4,7 @@ import { createRenderer } from "./gl/renderer.js";
 import { createStore } from "./state.js";
 import { ZERO_SETTINGS } from "./tone/tone-math.js";
 import { buildPanel } from "./ui/panel.js";
+import { initHistogram } from "./ui/histogram.js";
 import { initDropzone } from "./ui/dropzone.js";
 import { initDivider } from "./ui/divider.js";
 import { initElevator } from "./ui/elevator.js";
@@ -41,7 +42,9 @@ function queueRender() {
   renderQueued = true;
   requestAnimationFrame(() => {
     renderQueued = false;
-    renderer.render(store.get());
+    const settings = store.get();
+    renderer.render(settings);
+    if (histo.visible()) histo.draw(renderer.computeHistogram(settings));
   });
 }
 store.subscribe(queueRender);
@@ -94,6 +97,7 @@ async function openFile(file) {
     store.set({ ...ZERO_SETTINGS });
     layout();
     panel.setEnabled(true);
+    histo.setHasImage(true);
     status.setFile(
       `${file.name} — ${meta.camera_make} ${meta.camera_model} — ` +
         `${meta.width}×${meta.height} (preview decoded in ${(decodeMs / 1000).toFixed(1)}s)`,
@@ -156,6 +160,8 @@ async function onExport(format) {
 
 // --- wiring ---
 
+// Histogram first so its section sits above the panel's slider sections.
+const histo = initHistogram(panelScroll, viewport, { onToggle: queueRender });
 const panel = buildPanel(panelScroll, store, { onExport });
 const dropzone = initDropzone({
   onFile: openFile,

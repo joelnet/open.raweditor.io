@@ -10,8 +10,7 @@
   --accent-red: #ff7575;
   --accent-blue: #5fb2ff;
   --mono:
-    ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
-    monospace;
+    ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 * {
@@ -156,6 +155,66 @@ button:disabled {
   }
 }
 
+/* ---- histogram ---- */
+
+.section.section-histogram {
+  border-left-color: var(--accent-blue);
+}
+
+.histo-body {
+  padding: 8px 12px 2px;
+}
+
+.histo-body canvas {
+  display: block;
+  width: 100%;
+  height: 100px;
+  background: var(--bg-deep);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+}
+
+/* mobile toggle + overlay live in #viewport; hidden on desktop */
+
+#histo-toggle {
+  display: none;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: rgba(27, 33, 51, 0.85);
+  z-index: 3;
+}
+
+#histo-toggle.active {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+#histo-overlay {
+  display: none;
+  position: absolute;
+  top: 50px;
+  right: 10px;
+  padding: 5px;
+  background: rgba(16, 20, 31, 0.78);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  z-index: 3;
+  pointer-events: none; /* let touches reach the image beneath */
+}
+
+#histo-overlay canvas {
+  display: block;
+  width: 168px;
+  height: 64px;
+}
+
 /* ---- split divider (mobile only) ---- */
 
 #divider {
@@ -208,6 +267,19 @@ button:disabled {
 
   #dropzone {
     inset: 12px;
+  }
+
+  /* histogram: swap the panel section for the corner toggle + overlay */
+  .section-histogram {
+    display: none;
+  }
+
+  #histo-toggle:not([hidden]) {
+    display: flex;
+  }
+
+  #histo-overlay.open {
+    display: block;
   }
 }
 
