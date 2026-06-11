@@ -220,10 +220,22 @@ function onAuto(title) {
   }
 }
 
+// Revert: back to the just-opened state — sliders, crop, bypass, and zoom.
+function onRevert() {
+  if (!previewSize) return;
+  panel.resetBypass();
+  crop.reset();
+  zoom.reset();
+  zoom.setEnabled(true); // crop.reset() may have silently left crop mode
+  store.set({ ...ZERO_SETTINGS });
+  layout();
+}
+
 const panel = buildPanel(panelScroll, store, {
   onExport,
   onBypassChange: queueRender,
   onAuto,
+  onRevert,
 });
 const dropzone = initDropzone({
   onFile: openFile,

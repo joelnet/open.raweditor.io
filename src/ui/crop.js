@@ -429,14 +429,30 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   overlay.addEventListener("pointerup", endDrag);
   overlay.addEventListener("pointercancel", endDrag);
 
+  /** Reset rect and chips to the full frame and drop out of crop mode,
+   * all without callbacks (the caller re-layouts anyway). */
+  function reset() {
+    rect = { ...FULL_RECT };
+    if (active) {
+      active = false;
+      drag = null;
+      overlay.hidden = true;
+      cropBtn.textContent = "Crop";
+      cropBtn.classList.remove("active");
+      document.removeEventListener("keydown", onKey);
+    }
+    setChipsToFree();
+    updateSize();
+  }
+
   return {
     /** @returns {import("../tone/tone-math.js").CropRect} */
     rect: () => ({ ...rect }),
     isActive: () => active,
     reposition,
+    reset,
     /**
-     * New image opened: remember its dimensions, reset the crop, and drop
-     * out of crop mode without callbacks (the caller re-layouts anyway).
+     * New image opened: remember its dimensions and reset the crop.
      * @param {number} previewW @param {number} previewH
      * @param {number} fullResW @param {number} fullResH
      */
@@ -445,17 +461,7 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
       imgH = previewH;
       fullW = fullResW;
       fullH = fullResH;
-      rect = { ...FULL_RECT };
-      if (active) {
-        active = false;
-        drag = null;
-        overlay.hidden = true;
-        cropBtn.textContent = "Crop";
-        cropBtn.classList.remove("active");
-        document.removeEventListener("keydown", onKey);
-      }
-      setChipsToFree();
-      updateSize();
+      reset();
     },
     /** @param {boolean} on */
     setEnabled(on) {

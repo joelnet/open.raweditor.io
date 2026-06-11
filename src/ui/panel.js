@@ -35,12 +35,13 @@ function el(tag, className, text) {
  * @param {import("../state.js").Store} store
  * @param {{ onExport: (format: "png" | "jpeg") => void,
  *           onBypassChange: () => void,
- *           onAuto: (title: string) => void }} handlers
+ *           onAuto: (title: string) => void,
+ *           onRevert: () => void }} handlers
  */
 export function buildPanel(
   container,
   store,
-  { onExport, onBypassChange, onAuto },
+  { onExport, onBypassChange, onAuto, onRevert },
 ) {
   /** @type {Map<string, { input: HTMLInputElement, value: HTMLElement,
    *                        decimals: number, scale: number }>} */
@@ -148,7 +149,20 @@ export function buildPanel(
   exportBody.append(exportRow);
   exportSection.append(exportBody);
 
-  container.append(...sections, exportSection);
+  // Revert: drop every edit (sliders, crop, bypass) back to the
+  // just-opened state.
+  const revertSection = el("div", "section section-revert");
+  const revertBody = el("div", "revert-body");
+  const revertBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Revert All Edits")
+  );
+  revertBtn.type = "button";
+  revertBtn.disabled = true;
+  revertBtn.addEventListener("click", () => onRevert());
+  revertBody.append(revertBtn);
+  revertSection.append(revertBody);
+
+  container.append(...sections, exportSection, revertSection);
 
   store.subscribe((state) => {
     for (const [key, row] of rows) {
@@ -179,6 +193,7 @@ export function buildPanel(
       }
       pngBtn.disabled = !enabled;
       jpgBtn.disabled = !enabled;
+      revertBtn.disabled = !enabled;
     },
     /**
      * Settings with bypassed sections' sliders treated as zero — what the
