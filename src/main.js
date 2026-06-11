@@ -3,6 +3,7 @@ import { boxDownscaleToRgba16 } from "./decode/downscale.js";
 import { createRenderer, FULL_VIEW } from "./gl/renderer.js";
 import { createStore } from "./state.js";
 import { ZERO_SETTINGS, cropPixelRect } from "./tone/tone-math.js";
+import { orientedDims, frameRectToSource } from "./tone/geometry.js";
 import { autoWhiteBalance, autoTone } from "./tone/auto.js";
 import { buildPanel } from "./ui/panel.js";
 import { initHistogram } from "./ui/histogram.js";
@@ -50,14 +51,16 @@ function queueRender() {
   requestAnimationFrame(() => {
     renderQueued = false;
     const settings = effectiveSettings();
+    const geometry = crop.geometry();
     // crop mode shows the full frame under the overlay; otherwise the
     // zoom/pan window inside the crop. The histogram always reflects the
     // crop — what an export would contain — regardless of zoom.
     renderer.render(settings, crop.isActive() ? FULL_VIEW : zoom.view(), {
       maskOverlay: masks.overlayIndex(),
+      geometry,
     });
     if (histo.visible()) {
-      histo.draw(renderer.computeHistogram(settings, crop.rect()));
+      histo.draw(renderer.computeHistogram(settings, crop.rect(), geometry));
     }
   });
 }
@@ -71,12 +74,20 @@ function effectiveSettings() {
 
 // --- layout: fit canvas to viewport at the visible region's aspect ---
 
+/** Preview dims of the oriented image (the frame the crop rect lives in). */
+function frameSize() {
+  if (!previewSize) return null;
+  const g = crop.geometry();
+  return orientedDims(g.orient, previewSize.width, previewSize.height);
+}
+
 function layout() {
-  if (!previewSize || !renderer) return;
+  const frame = frameSize();
+  if (!frame || !renderer) return;
   const pad = 24;
   const rect = crop.isActive() ? FULL_VIEW : crop.rect();
-  const srcW = Math.max(previewSize.width * rect.w, 1);
-  const srcH = Math.max(previewSize.height * rect.h, 1);
+  const srcW = Math.max(frame.width * rect.w, 1);
+  const srcH = Math.max(frame.height * rect.h, 1);
   const maxW = Math.max(viewport.clientWidth - pad * 2, 64);
   const maxH = Math.max(viewport.clientHeight - pad * 2, 64);
   const scale = Math.min(maxW / srcW, maxH / srcH, 1);
@@ -163,18 +174,21 @@ async function onExport(format) {
   const file = currentFile;
   const settings = effectiveSettings();
   const cropRect = crop.rect();
+  const geometry = crop.geometry();
   panel.setExportBusy(true, format);
   try {
     status.setProgress("Export: decoding full resolution…");
     const bytes = new Uint8Array(await file.arrayBuffer());
     const { image } = await decoder.decode(bytes, {});
-    const px = cropPixelRect(cropRect, image.width, image.height);
+    const frame = orientedDims(geometry.orient, image.width, image.height);
+    const px = cropPixelRect(cropRect, frame.width, frame.height);
     status.setProgress("Export: applying tone…");
     const blob = await exporter.exportImage(
       image,
       settings,
       format,
       cropRect,
+      geometry,
       (done, total) => {
         status.setProgress(
           `Export: applying tone… ${Math.round((done / total) * 100)}%`,
@@ -212,10 +226,17 @@ const crop = initCrop(viewport, canvas, panelScroll, {
     masks.setCropActive(active);
     layout();
   },
+  // 90° turn or straighten change: the frame aspect may have swapped, so
+  // masks re-normalize and the whole layout (canvas aspect) follows
+  onGeometryChange: () => {
+    const frame = frameSize();
+    if (frame) masks.setFrameSize(frame.width, frame.height);
+    layout();
+  },
 });
 const zoom = initZoom(canvas, viewport, {
   getBounds: () => crop.rect(),
-  getImageSize: () => previewSize,
+  getImageSize: () => frameSize(),
   onChange: () => {
     masks.reposition(); // the overlay maps masks through the zoom window
     queueRender();
@@ -230,8 +251,11 @@ const masks = initMasks(viewport, canvas, panelScroll, store, {
 /** @param {string} title */
 function onAuto(title) {
   if (!previewImage) return;
+  // Stats run on the source-oriented preview pixels; map the frame-space
+  // crop back through the 90° turns (the straighten angle is ignored —
+  // close enough for statistics).
   const rect = cropPixelRect(
-    crop.rect(),
+    frameRectToSource(crop.geometry().orient, crop.rect()),
     previewImage.width,
     previewImage.height,
   );
@@ -249,7 +273,8 @@ function onRevert() {
   if (!previewSize) return;
   panel.resetBypass();
   masks.resetBypass();
-  crop.reset();
+  crop.reset(); // also clears rotation, so the frame is the source again
+  masks.setFrameSize(previewSize.width, previewSize.height);
   zoom.reset();
   zoom.setEnabled(true); // crop.reset() may have silently left crop mode
   store.set({ ...ZERO_SETTINGS });

@@ -15,10 +15,11 @@ export function createExporter() {
      * @param {import("../tone/tone-math.js").ToneSettings} settings
      * @param {"png" | "jpeg"} format
      * @param {import("../tone/tone-math.js").CropRect | null} crop
+     * @param {import("../tone/geometry.js").Geometry} geometry
      * @param {(done: number, total: number) => void} [onProgress]
      * @returns {Promise<Blob>}
      */
-    exportImage(image, settings, format, crop, onProgress) {
+    exportImage(image, settings, format, crop, geometry, onProgress) {
       if (!worker) {
         worker = new Worker(new URL("./worker.js", import.meta.url), {
           type: "module",
@@ -35,7 +36,9 @@ export function createExporter() {
         };
         w.onerror = (e) =>
           reject(new Error(e.message || "export worker error"));
-        w.postMessage({ image, settings, format, crop }, [image.data.buffer]);
+        w.postMessage({ image, settings, format, crop, geometry }, [
+          image.data.buffer,
+        ]);
       });
     },
   };

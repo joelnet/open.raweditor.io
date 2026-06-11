@@ -66,6 +66,14 @@ uniform float u_gradeHighLum;   // [-1, 1]
 uniform float u_gradeBlending;  // [0, 1]
 uniform float u_gradeBalance;   // [-1, 1]
 
+// Geometry: orientation (quarter-turns CW) + straighten rotation. v_uv is
+// frame UV (the oriented image); frameToSourceUv mirrors frameToSource()
+// in tone/geometry.js.
+uniform int u_orient;           // 0–3
+uniform vec2 u_rot;             // cos, sin of the straighten angle
+uniform float u_coverScale;     // ≥ 1, keeps the frame free of blank corners
+uniform vec2 u_frame;           // frame size in px (oriented preview dims)
+
 // Local masks — geometry and adjustments mirror tone/mask-math.js.
 uniform int u_maskCount;
 uniform vec4 u_maskGeo[${MASK.MAX}];   // x, y (UV), angle (rad), type (0 linear, 1 radial)
@@ -191,9 +199,22 @@ vec3 applyMaskAdjust(vec3 rgb, float m, vec4 adjA, vec4 adjB, vec4 adjC) {
   return rgb;
 }
 
+vec2 frameToSourceUv(vec2 uv) {
+  vec2 p = (uv - 0.5) * u_frame;
+  // inverse of the on-screen CW rotation (y-down coordinates)
+  p = vec2(u_rot.x * p.x + u_rot.y * p.y, -u_rot.y * p.x + u_rot.x * p.y)
+    / u_coverScale;
+  vec2 f = p / u_frame + 0.5;
+  if (u_orient == 1) return vec2(f.y, 1.0 - f.x);
+  if (u_orient == 2) return vec2(1.0 - f.x, 1.0 - f.y);
+  if (u_orient == 3) return vec2(1.0 - f.y, f.x);
+  return f;
+}
+
 void main() {
   ivec2 ts = textureSize(u_image, 0);
-  ivec2 p = clamp(ivec2(v_uv * vec2(ts)), ivec2(0), ts - 1);
+  vec2 suv = frameToSourceUv(v_uv);
+  ivec2 p = clamp(ivec2(suv * vec2(ts)), ivec2(0), ts - 1);
   vec3 rgb = decodeInput(vec3(texelFetch(u_image, p, 0).rgb) / 65535.0);
 
   // 1. white balance: +temp warms (red up, blue down), +tint goes magenta
@@ -229,7 +250,7 @@ void main() {
   // per-pixel weight (Lightroom layering: locals stack on the globals)
   for (int i = 0; i < ${MASK.MAX}; i++) {
     if (i >= u_maskCount) break;
-    float mw = maskWeight(v_uv, vec2(ts), u_maskGeo[i], u_maskParam[i]);
+    float mw = maskWeight(v_uv, u_frame, u_maskGeo[i], u_maskParam[i]);
     if (mw > 0.0) {
       rgb = applyMaskAdjust(rgb, mw, u_maskAdjA[i], u_maskAdjB[i], u_maskAdjC[i]);
     }
@@ -282,7 +303,7 @@ void main() {
   // mask visualization: tint the selected mask's coverage red
   // (preview-only — the CPU export has no counterpart on purpose)
   if (u_maskOverlay >= 0 && u_maskOverlay < u_maskCount) {
-    float ov = maskWeight(v_uv, vec2(ts),
+    float ov = maskWeight(v_uv, u_frame,
       u_maskGeo[u_maskOverlay], u_maskParam[u_maskOverlay]);
     display = mix(display, vec3(0.86, 0.15, 0.15), ov * 0.55);
   }

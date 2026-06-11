@@ -646,6 +646,13 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       return showMask && overlayVisible() ? selected : -1;
     },
     reposition,
+    /** Frame dims changed (90° rotation) — masks keep their frame-UV
+     * coordinates, only the pixel-space normalization follows.
+     * @param {number} frameW @param {number} frameH */
+    setFrameSize(frameW, frameH) {
+      imgW = frameW;
+      imgH = frameH;
+    },
     /** @param {number} previewW @param {number} previewH */
     setImage(previewW, previewH) {
       imgW = previewW;

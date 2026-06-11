@@ -341,6 +341,12 @@ button:disabled {
   gap: 6px;
 }
 
+/* the straighten slider reuses the panel's slider-row grid; crop-body
+   already provides the horizontal padding */
+.crop-body .slider-row {
+  padding: 0;
+}
+
 .crop-actions button {
   flex: 1;
   min-width: 0;

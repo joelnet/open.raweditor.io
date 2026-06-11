@@ -3,6 +3,12 @@
 
 import { TONE, GRADE, INPUT_TRANSFER, LUMA } from "./constants.js";
 import { prepareMask, maskWeight } from "./mask-math.js";
+import {
+  ZERO_GEOMETRY,
+  isIdentityGeometry,
+  orientedDims,
+  coverScale,
+} from "./geometry.js";
 
 /**
  * Tone settings, all pre-scaled: exposure in EV (±5), grade hues in turns
@@ -393,7 +399,9 @@ export function cropPixelRect(crop, width, height) {
  * optionally windowed to a pixel crop rect. `out` is rect-sized
  * (rect.w × rect.h × 4) and rowStart/rowEnd index rows of the rect, not
  * the source image. Lets the caller (export worker) chunk work and report
- * progress.
+ * progress. With a non-identity `geometry`, the rect lives on the
+ * *oriented* (frame) pixel grid and source pixels are sampled through the
+ * orientation + straighten transform (bilinear in linear light).
  * @param {{ data: Uint16Array | Uint8Array, width: number, height: number,
  *           colors: number, bits: number }} image
  * @param {ToneSettings} settings
@@ -401,33 +409,108 @@ export function cropPixelRect(crop, width, height) {
  * @param {number} rowStart inclusive, in rect rows
  * @param {number} rowEnd exclusive, in rect rows
  * @param {{ x: number, y: number, w: number, h: number }} [rect] pixel
- *   crop; defaults to the full image
+ *   crop on the frame grid; defaults to the full frame
+ * @param {import("./geometry.js").Geometry} [geometry]
  */
-export function toneMapRows(image, settings, out, rowStart, rowEnd, rect) {
+export function toneMapRows(
+  image,
+  settings,
+  out,
+  rowStart,
+  rowEnd,
+  rect,
+  geometry = ZERO_GEOMETRY,
+) {
   const { data, width, height, colors, bits } = image;
+  const identity = isIdentityGeometry(geometry);
+  const frame = orientedDims(geometry.orient, width, height);
   const rx = rect ? rect.x : 0;
   const ry = rect ? rect.y : 0;
-  const rw = rect ? rect.w : width;
+  const rw = rect ? rect.w : frame.width;
   const maxVal = bits === 16 ? 65535 : 255;
-  // Mask geometry is normalized to the full image, so weights are computed
-  // from uncropped pixel coordinates.
+  // Mask geometry is normalized to the full frame, so weights are computed
+  // from uncropped frame coordinates (mirrors the shader, which evaluates
+  // masks at v_uv against u_frame).
   const masks = settings.masks?.length ? settings.masks : null;
   const prepared = masks
-    ? masks.map((mk) => prepareMask(mk, width, height))
+    ? masks.map((mk) => prepareMask(mk, frame.width, frame.height))
     : null;
   const weights = masks ? new Float64Array(masks.length) : undefined;
+
+  // Straighten transform constants (mirrors frameToSource in geometry.js,
+  // inlined to keep the per-pixel path allocation-free).
+  const fw = frame.width;
+  const fh = frame.height;
+  const orient = geometry.orient & 3;
+  const rad = (geometry.angle * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const inv = 1 / coverScale(geometry.angle, fw, fh);
+
+  /**
+   * Bilinear sample of the source at (sx, sy) px, decoded to linear light.
+   * @param {number} sx @param {number} sy
+   * @returns {[number, number, number]}
+   */
+  const sample = [0, 0, 0];
+  /** @param {number} sx @param {number} sy frame→source px, bilinear */
+  function sampleSource(sx, sy) {
+    const u = sx - 0.5;
+    const v = sy - 0.5;
+    const xf = Math.floor(u);
+    const yf = Math.floor(v);
+    const tx = u - xf;
+    const ty = v - yf;
+    const x0 = Math.min(Math.max(xf, 0), width - 1);
+    const y0 = Math.min(Math.max(yf, 0), height - 1);
+    const x1 = Math.min(Math.max(xf + 1, 0), width - 1);
+    const y1 = Math.min(Math.max(yf + 1, 0), height - 1);
+    const i00 = (y0 * width + x0) * colors;
+    const i10 = (y0 * width + x1) * colors;
+    const i01 = (y1 * width + x0) * colors;
+    const i11 = (y1 * width + x1) * colors;
+    for (let c = 0; c < 3; c++) {
+      const a =
+        decodeInput(data[i00 + c] / maxVal) * (1 - tx) +
+        decodeInput(data[i10 + c] / maxVal) * tx;
+      const b =
+        decodeInput(data[i01 + c] / maxVal) * (1 - tx) +
+        decodeInput(data[i11 + c] / maxVal) * tx;
+      sample[c] = a * (1 - ty) + b * ty;
+    }
+  }
+
   for (let yRow = rowStart; yRow < rowEnd; yRow++) {
     let src = ((yRow + ry) * width + rx) * colors;
     let dst = yRow * rw * 4;
-    const py = yRow + ry + 0.5;
+    const fy = yRow + ry + 0.5;
     for (let x = 0; x < rw; x++) {
-      const r = decodeInput(data[src] / maxVal);
-      const g = decodeInput(data[src + 1] / maxVal);
-      const b = decodeInput(data[src + 2] / maxVal);
+      const fx = x + rx + 0.5;
+      let r, g, b;
+      if (identity) {
+        r = decodeInput(data[src] / maxVal);
+        g = decodeInput(data[src + 1] / maxVal);
+        b = decodeInput(data[src + 2] / maxVal);
+      } else {
+        let qx = fx;
+        let qy = fy;
+        if (sinA !== 0) {
+          const px = fx - fw / 2;
+          const py = fy - fh / 2;
+          qx = (cosA * px + sinA * py) * inv + fw / 2;
+          qy = (-sinA * px + cosA * py) * inv + fh / 2;
+        }
+        if (orient === 1) sampleSource(qy, height - qx);
+        else if (orient === 2) sampleSource(width - qx, height - qy);
+        else if (orient === 3) sampleSource(width - qy, qx);
+        else sampleSource(qx, qy);
+        r = sample[0];
+        g = sample[1];
+        b = sample[2];
+      }
       if (prepared && weights) {
-        const px = x + rx + 0.5;
         for (let j = 0; j < prepared.length; j++) {
-          weights[j] = maskWeight(prepared[j], px, py);
+          weights[j] = maskWeight(prepared[j], fx, fy);
         }
       }
       const [or, og, ob] = applyTonePixel(r, g, b, settings, weights);

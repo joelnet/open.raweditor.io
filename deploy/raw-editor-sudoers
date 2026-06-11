@@ -1,0 +1,2 @@
+joel ALL=(root) NOPASSWD: /usr/bin/systemctl start raw-editor.service, /usr/bin/systemctl stop raw-editor.service, /usr/bin/systemctl restart raw-editor.service
+joel ALL=(root) NOPASSWD: /usr/bin/journalctl -u raw-editor.service, /usr/bin/journalctl -u raw-editor.service -f, /usr/bin/journalctl -u raw-editor.service -n *, /usr/bin/journalctl -u raw-editor.service --no-pager

@@ -1,11 +1,14 @@
-// Crop tool: a normalized crop rect (image UV space) plus the two UIs that
-// edit it — a sidebar CROP section (aspect presets, Crop/Done + Reset
-// buttons, export-size readout) and a viewport overlay with a draggable
-// rect, rule-of-thirds grid, and eight resize handles, shown while crop
-// mode is active. One rect drives the preview shader window, the
-// histogram, and the full-res export.
+// Crop tool: a normalized crop rect (frame UV space — the image after its
+// 90° turns) plus the two UIs that edit it — a sidebar CROP section
+// (aspect presets, rotate 90° buttons, straighten slider, Crop/Done +
+// Reset buttons, export-size readout) and a viewport overlay with a
+// draggable rect, rule-of-thirds grid, and eight resize handles, shown
+// while crop mode is active. One rect (plus the orientation/straighten
+// geometry) drives the preview shader window, the histogram, and the
+// full-res export.
 
 import { moveRect, resizeRect, fitAspect } from "./crop-math.js";
+import { rotateRectCW, rotateRectCCW } from "../tone/geometry.js";
 
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const MIN_CROP_PX = 24; // display px — keeps the box and handles grabbable
@@ -65,7 +68,8 @@ function el(tag, className, text) {
  * @param {HTMLCanvasElement} canvas preview canvas the overlay tracks
  * @param {HTMLElement} panelContainer sidebar column the section renders into
  * @param {{ onRectChange: () => void,
- *           onModeChange: (active: boolean) => void }} handlers
+ *           onModeChange: (active: boolean) => void,
+ *           onGeometryChange: () => void }} handlers
  */
 export function initCrop(viewport, canvas, panelContainer, handlers) {
   /** @type {import("../tone/tone-math.js").CropRect} */
@@ -78,10 +82,16 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   let imgH = 0;
   let fullW = 0; // full-res px — for the export-size readout
   let fullH = 0;
+  let orient = 0; // quarter-turns clockwise
+  let angle = 0; // straighten, degrees, +CW
   /** @type {import("../tone/tone-math.js").CropRect} */
   let rectOnEnter = { ...FULL_RECT };
   let dispW = 0; // canvas CSS box, cached by reposition()
   let dispH = 0;
+
+  // frame = the oriented image (after the 90° turns)
+  const frameW = () => (orient % 2 ? imgH : imgW);
+  const frameH = () => (orient % 2 ? imgW : imgH);
 
   // --- sidebar section ---
 
@@ -135,10 +145,10 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
       if (chip.classList.contains("active") && pair) {
         pair = [pair[1], pair[0]]; // re-click flips orientation
       } else if (base === "orig") {
-        pair = [imgW, imgH];
+        pair = [frameW(), frameH()];
       } else {
         // landscape presets follow the frame orientation on first pick
-        pair = imgH > imgW ? [base[1], base[0]] : [base[0], base[1]];
+        pair = frameH() > frameW() ? [base[1], base[0]] : [base[0], base[1]];
       }
       if (base !== "orig") chip.textContent = ratioLabel(pair);
       applyPair(chip, pair);
@@ -238,6 +248,69 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   });
   chipButtons.push(customChip, editChip);
   chips.append(customChip, editChip);
+  // --- rotate 90° + straighten ---
+
+  const rotateRow = el("div", "crop-actions crop-rotate");
+  const rotCcwBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "⟲ 90°")
+  );
+  const rotCwBtn = /** @type {HTMLButtonElement} */ (el("button", "", "90° ⟳"));
+  rotCcwBtn.type = "button";
+  rotCwBtn.type = "button";
+  rotCcwBtn.title = "Rotate counter-clockwise";
+  rotCwBtn.title = "Rotate clockwise";
+  rotCcwBtn.disabled = true;
+  rotCwBtn.disabled = true;
+  rotateRow.append(rotCcwBtn, rotCwBtn);
+
+  const angleRow = el("div", "slider-row crop-angle");
+  const angleLabel = el("span", "slider-label", "STRAIGHTEN");
+  const angleValue = el("span", "slider-value", "0.0°");
+  const angleInput = /** @type {HTMLInputElement} */ (el("input"));
+  angleInput.type = "range";
+  angleInput.min = "-45";
+  angleInput.max = "45";
+  angleInput.step = "0.1";
+  angleInput.value = "0";
+  angleInput.disabled = true;
+  angleInput.setAttribute("aria-label", "straighten angle");
+  angleRow.append(angleLabel, angleValue, angleInput);
+
+  function syncAngleUi() {
+    if (Math.abs(angleInput.valueAsNumber - angle) > 1e-9) {
+      angleInput.value = String(angle);
+    }
+    angleValue.textContent = `${angle > 0 ? "+" : ""}${angle.toFixed(1)}°`;
+    angleValue.classList.toggle("pos", angle > 0);
+    angleValue.classList.toggle("neg", angle < 0);
+  }
+
+  angleInput.addEventListener("input", () => {
+    if (!enabled) return;
+    angle = angleInput.valueAsNumber;
+    syncAngleUi();
+    handlers.onGeometryChange();
+  });
+  // double-click the label/value to snap back to level
+  angleRow.addEventListener("dblclick", () => {
+    if (!enabled || angle === 0) return;
+    angle = 0;
+    syncAngleUi();
+    handlers.onGeometryChange();
+  });
+
+  /** @param {1 | -1} dir quarter-turns clockwise */
+  function rotate90(dir) {
+    if (!enabled || imgW === 0) return;
+    orient = (orient + (dir === 1 ? 1 : 3)) % 4;
+    rect = dir === 1 ? rotateRectCW(rect) : rotateRectCCW(rect);
+    if (aspect) aspect = 1 / aspect;
+    updateSize();
+    handlers.onGeometryChange();
+  }
+  rotCwBtn.addEventListener("click", () => rotate90(1));
+  rotCcwBtn.addEventListener("click", () => rotate90(-1));
+
   const actions = el("div", "crop-actions");
   const cropBtn = /** @type {HTMLButtonElement} */ (el("button", "", "Crop"));
   const resetBtn = /** @type {HTMLButtonElement} */ (el("button", "", "Reset"));
@@ -247,7 +320,7 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   resetBtn.disabled = true;
   actions.append(cropBtn, resetBtn);
   const sizeLine = el("div", "crop-size");
-  body.append(chips, actions, sizeLine);
+  body.append(chips, rotateRow, angleRow, actions, sizeLine);
   section.append(body);
   panelContainer.append(section);
 
@@ -273,8 +346,10 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   }
 
   function updateSize() {
-    sizeLine.textContent = fullW
-      ? `${Math.max(Math.round(rect.w * fullW), 1)} × ${Math.max(Math.round(rect.h * fullH), 1)} px`
+    const fw = orient % 2 ? fullH : fullW;
+    const fh = orient % 2 ? fullW : fullH;
+    sizeLine.textContent = fw
+      ? `${Math.max(Math.round(rect.w * fw), 1)} × ${Math.max(Math.round(rect.h * fh), 1)} px`
       : "";
   }
 
@@ -367,9 +442,14 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   resetBtn.addEventListener("click", () => {
     rect = { ...FULL_RECT };
     setChipsToFree();
+    const geoChanged = orient !== 0 || angle !== 0;
+    orient = 0;
+    angle = 0;
+    syncAngleUi();
     updateBox();
     updateSize();
-    handlers.onRectChange();
+    if (geoChanged) handlers.onGeometryChange();
+    else handlers.onRectChange();
   });
 
   // double-click inside the rect commits, like the Done button
@@ -433,6 +513,9 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
    * all without callbacks (the caller re-layouts anyway). */
   function reset() {
     rect = { ...FULL_RECT };
+    orient = 0;
+    angle = 0;
+    syncAngleUi();
     if (active) {
       active = false;
       drag = null;
@@ -448,6 +531,8 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   return {
     /** @returns {import("../tone/tone-math.js").CropRect} */
     rect: () => ({ ...rect }),
+    /** @returns {import("../tone/geometry.js").Geometry} */
+    geometry: () => ({ orient, angle }),
     isActive: () => active,
     reposition,
     reset,
@@ -469,6 +554,9 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
       enabled = on;
       cropBtn.disabled = !on;
       resetBtn.disabled = !on;
+      rotCwBtn.disabled = !on;
+      rotCcwBtn.disabled = !on;
+      angleInput.disabled = !on;
       for (const c of chipButtons) c.disabled = !on;
     },
   };

@@ -4,6 +4,7 @@
 
 import { VERTEX_SHADER, FRAGMENT_SHADER } from "./shaders.js";
 import { MASK } from "../tone/constants.js";
+import { ZERO_GEOMETRY, orientedDims, coverScale } from "../tone/geometry.js";
 
 /**
  * Normalized window into the image (UV space, y = 0 at the top).
@@ -63,8 +64,8 @@ function compileShader(gl, type, source) {
  * @typedef {{
  *   setImage(img: { pixels: Uint16Array, width: number, height: number }): void,
  *   setSize(width: number, height: number): void,
- *   render(settings: import("../tone/tone-math.js").ToneSettings, view?: ViewRect, opts?: { maskOverlay?: number }): void,
- *   computeHistogram(settings: import("../tone/tone-math.js").ToneSettings, view?: ViewRect): HistogramBins | null,
+ *   render(settings: import("../tone/tone-math.js").ToneSettings, view?: ViewRect, opts?: { maskOverlay?: number, geometry?: import("../tone/geometry.js").Geometry }): void,
+ *   computeHistogram(settings: import("../tone/tone-math.js").ToneSettings, view?: ViewRect, geometry?: import("../tone/geometry.js").Geometry): HistogramBins | null,
  * }} Renderer
  */
 
@@ -104,6 +105,10 @@ export function createRenderer(canvas) {
   }
   const locViewOffset = gl.getUniformLocation(program, "u_view_offset");
   const locViewScale = gl.getUniformLocation(program, "u_view_scale");
+  const locOrient = gl.getUniformLocation(program, "u_orient");
+  const locRot = gl.getUniformLocation(program, "u_rot");
+  const locCoverScale = gl.getUniformLocation(program, "u_coverScale");
+  const locFrame = gl.getUniformLocation(program, "u_frame");
   const locMaskCount = gl.getUniformLocation(program, "u_maskCount");
   const locMaskGeo = gl.getUniformLocation(program, "u_maskGeo");
   const locMaskParam = gl.getUniformLocation(program, "u_maskParam");
@@ -120,17 +125,31 @@ export function createRenderer(canvas) {
   const maskAdjB = new Float32Array(MASK.MAX * 4);
   const maskAdjC = new Float32Array(MASK.MAX * 4);
 
+  let imgW = 0;
+  let imgH = 0;
+
   /**
    * @param {import("../tone/tone-math.js").ToneSettings} settings
    * @param {ViewRect} view
    * @param {number} maskOverlay mask index to visualize, -1 = off
+   * @param {import("../tone/geometry.js").Geometry} geometry
    */
-  const setUniforms = (settings, view, maskOverlay) => {
+  const setUniforms = (settings, view, maskOverlay, geometry) => {
     for (const name of UNIFORMS) {
       gl.uniform1f(loc[name], settings[name]);
     }
     gl.uniform2f(locViewOffset, view.x, view.y);
     gl.uniform2f(locViewScale, view.w, view.h);
+
+    const frame = orientedDims(geometry.orient, imgW, imgH);
+    const rad = (geometry.angle * Math.PI) / 180;
+    gl.uniform1i(locOrient, geometry.orient & 3);
+    gl.uniform2f(locRot, Math.cos(rad), Math.sin(rad));
+    gl.uniform1f(
+      locCoverScale,
+      coverScale(geometry.angle, frame.width, frame.height),
+    );
+    gl.uniform2f(locFrame, frame.width, frame.height);
 
     const masks = settings.masks ?? [];
     const count = Math.min(masks.length, MASK.MAX);
@@ -213,6 +232,8 @@ export function createRenderer(canvas) {
         gl.UNSIGNED_SHORT,
         pixels,
       );
+      imgW = width;
+      imgH = height;
       hasImage = true;
     },
 
@@ -232,12 +253,18 @@ export function createRenderer(canvas) {
      * `maskOverlay` tints that mask's coverage red (preview aid).
      * @param {import("../tone/tone-math.js").ToneSettings} settings
      * @param {ViewRect} [view]
-     * @param {{ maskOverlay?: number }} [opts]
+     * @param {{ maskOverlay?: number,
+     *           geometry?: import("../tone/geometry.js").Geometry }} [opts]
      */
     render(settings, view = FULL_VIEW, opts = {}) {
       if (!hasImage) return;
       gl.viewport(0, 0, canvas.width, canvas.height);
-      setUniforms(settings, view, opts.maskOverlay ?? -1);
+      setUniforms(
+        settings,
+        view,
+        opts.maskOverlay ?? -1,
+        opts.geometry ?? ZERO_GEOMETRY,
+      );
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
 
@@ -249,9 +276,10 @@ export function createRenderer(canvas) {
      * The returned arrays are reused across calls — consume immediately.
      * @param {import("../tone/tone-math.js").ToneSettings} settings
      * @param {ViewRect} [view]
+     * @param {import("../tone/geometry.js").Geometry} [geometry]
      * @returns {HistogramBins | null} null when no image is loaded
      */
-    computeHistogram(settings, view = FULL_VIEW) {
+    computeHistogram(settings, view = FULL_VIEW, geometry = ZERO_GEOMETRY) {
       if (!hasImage) return null;
       if (!histoFbo) {
         const tex = gl.createTexture();
@@ -272,7 +300,8 @@ export function createRenderer(canvas) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, histoFbo);
       }
       gl.viewport(0, 0, HISTO_W, HISTO_H);
-      setUniforms(settings, view, -1); // never let the overlay taint the bins
+      // never let the overlay taint the bins
+      setUniforms(settings, view, -1, geometry);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.readPixels(
         0,

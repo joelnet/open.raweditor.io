@@ -3,6 +3,7 @@
 // off the main thread; posts row progress between chunks.
 
 import { toneMapRows, cropPixelRect } from "../tone/tone-math.js";
+import { ZERO_GEOMETRY, orientedDims } from "../tone/geometry.js";
 
 const CHUNK_ROWS = 256;
 
@@ -10,12 +11,15 @@ const ctx = /** @type {any} */ (self);
 
 ctx.onmessage = async (/** @type {MessageEvent} */ e) => {
   const { image, settings, format, crop } = e.data;
+  const geometry = e.data.geometry ?? ZERO_GEOMETRY;
   try {
-    const rect = cropPixelRect(crop, image.width, image.height);
+    // The crop rect lives on the oriented (frame) pixel grid.
+    const frame = orientedDims(geometry.orient, image.width, image.height);
+    const rect = cropPixelRect(crop, frame.width, frame.height);
     const out = new Uint8ClampedArray(rect.w * rect.h * 4);
     for (let y = 0; y < rect.h; y += CHUNK_ROWS) {
       const end = Math.min(y + CHUNK_ROWS, rect.h);
-      toneMapRows(image, settings, out, y, end, rect);
+      toneMapRows(image, settings, out, y, end, rect, geometry);
       ctx.postMessage({ type: "progress", done: end, total: rect.h });
     }
     const canvas = new OffscreenCanvas(rect.w, rect.h);
