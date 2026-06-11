@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import { VitePWA } from "vite-plugin-pwa";
 
 // libraw-wasm is a pthreads build: it allocates shared WebAssembly.Memory,
 // which browsers only permit on cross-origin-isolated pages.
@@ -20,7 +21,19 @@ export default defineConfig({
   optimizeDeps: { exclude: ["libraw-wasm"] },
   worker: { format: "es" },
   build: { target: "es2022" },
-  plugins: useHttps ? [basicSsl()] : [],
+  plugins: [
+    ...(useHttps ? [basicSsl()] : []),
+    VitePWA({
+      registerType: "autoUpdate",
+      manifest: false,
+      workbox: {
+        globPatterns: ["**/*.{html,js,css,wasm}"],
+        // libraw wasm is ~1.4MB; Workbox silently skips files over its 2MB
+        // default, which would break offline without warning if it grows.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+      },
+    }),
+  ],
   server: { host: true, headers: isolationHeaders },
   preview: { host: true, headers: isolationHeaders },
 });
