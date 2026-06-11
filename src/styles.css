@@ -373,6 +373,16 @@ button:disabled {
   border-left-color: var(--accent-blue);
 }
 
+@media (min-width: 769px) {
+  .section.section-histogram {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin-top: 0;
+    box-shadow: 0 8px 14px rgba(16, 20, 31, 0.35);
+  }
+}
+
 .histo-body {
   padding: 8px 12px 2px;
 }
