@@ -99,6 +99,7 @@ async function openFile(file) {
     layout();
     panel.setEnabled(true);
     histo.setHasImage(true);
+    histo.setExif(meta);
     status.setFile(
       `${file.name} — ${meta.camera_make} ${meta.camera_model} — ` +
         `${meta.width}×${meta.height} (preview decoded in ${(decodeMs / 1000).toFixed(1)}s)`,

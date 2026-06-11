@@ -86,6 +86,28 @@ function makeCanvas(width, height) {
 }
 
 /**
+ * Shot settings as display tokens, e.g. ["ISO 500", "23mm", "f/2.8",
+ * "1/2700 sec"]. Fields a file doesn't report (0/NaN) are skipped.
+ * @param {import("libraw-wasm").Metadata} meta
+ */
+function exifTokens(meta) {
+  const tokens = [];
+  if (meta.iso_speed > 0) tokens.push(`ISO ${Math.round(meta.iso_speed)}`);
+  if (meta.focal_len > 0) tokens.push(`${Math.round(meta.focal_len)}mm`);
+  if (meta.aperture > 0) {
+    tokens.push(`f/${meta.aperture.toFixed(1).replace(/\.0$/, "")}`);
+  }
+  if (meta.shutter > 0) {
+    tokens.push(
+      meta.shutter >= 1
+        ? `${meta.shutter.toFixed(1).replace(/\.0$/, "")} sec`
+        : `1/${Math.round(1 / meta.shutter)} sec`,
+    );
+  }
+  return tokens;
+}
+
+/**
  * @param {HTMLElement} panelContainer sidebar column the section renders into
  * @param {HTMLElement} viewport image pane the mobile toggle/overlay attach to
  * @param {{ onToggle: () => void }} handlers onToggle: overlay opened, redraw
@@ -95,7 +117,8 @@ export function initHistogram(panelContainer, viewport, { onToggle }) {
   section.append(el("div", "section-header", "HISTOGRAM"));
   const body = el("div", "histo-body");
   const panelCanvas = makeCanvas(BINS, 100);
-  body.append(panelCanvas);
+  const panelExif = el("div", "histo-exif");
+  body.append(panelCanvas, panelExif);
   section.append(body);
   panelContainer.append(section);
 
@@ -116,7 +139,8 @@ export function initHistogram(panelContainer, viewport, { onToggle }) {
   const overlay = el("div");
   overlay.id = "histo-overlay";
   const overlayCanvas = makeCanvas(BINS, 96);
-  overlay.append(overlayCanvas);
+  const overlayExif = el("div", "histo-exif");
+  overlay.append(overlayCanvas, overlayExif);
   viewport.append(toggle, overlay);
 
   toggle.addEventListener("click", () => {
@@ -136,6 +160,17 @@ export function initHistogram(panelContainer, viewport, { onToggle }) {
       drawInto(panelCanvas, bins);
       drawInto(overlayCanvas, bins);
     },
+    /**
+     * Show the shot settings line below the histogram.
+     * @param {import("libraw-wasm").Metadata | null} meta
+     */
+    setExif(meta) {
+      const tokens = meta ? exifTokens(meta) : [];
+      for (const div of [panelExif, overlayExif]) {
+        div.textContent = "";
+        for (const t of tokens) div.append(el("span", "", t));
+      }
+    },
     /** @param {boolean} has */
     setHasImage(has) {
       toggle.hidden = !has;
@@ -143,6 +178,7 @@ export function initHistogram(panelContainer, viewport, { onToggle }) {
         overlay.classList.remove("open");
         toggle.classList.remove("active");
         toggle.setAttribute("aria-pressed", "false");
+        this.setExif(null);
       }
     },
   };

@@ -174,6 +174,23 @@ button:disabled {
   border-radius: 3px;
 }
 
+/* shot settings line: "ISO 500   23mm   f/2.8   1/2700 sec" */
+
+.histo-exif {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 1px 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.histo-exif:empty {
+  display: none;
+}
+
 /* mobile toggle + overlay live in #viewport; hidden on desktop */
 
 #histo-toggle {
@@ -213,6 +230,11 @@ button:disabled {
   display: block;
   width: 168px;
   height: 64px;
+}
+
+#histo-overlay .histo-exif {
+  font-size: 10px;
+  padding-top: 4px;
 }
 
 /* ---- split divider (mobile only) ---- */
