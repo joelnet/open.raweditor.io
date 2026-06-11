@@ -907,6 +907,7 @@ button:disabled {
 #statusbar {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 16px;
   padding: 6px 12px;
   background: var(--bg-deep);
@@ -920,6 +921,24 @@ button:disabled {
 #status-file {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+#status-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+#status-progress {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#app-version {
+  flex: 0 0 auto;
+  color: var(--muted);
+  opacity: 0.7;
 }
 
 #statusbar .error {

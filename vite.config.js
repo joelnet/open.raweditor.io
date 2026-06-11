@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { VitePWA } from "vite-plugin-pwa";
+import pkg from "./package.json" with { type: "json" };
 
 // libraw-wasm is a pthreads build: it allocates shared WebAssembly.Memory,
 // which browsers only permit on cross-origin-isolated pages.
@@ -22,6 +23,12 @@ export default defineConfig({
   worker: { format: "es" },
   build: { target: "es2022" },
   plugins: [
+    {
+      name: "raw-editor-version",
+      transformIndexHtml(html) {
+        return html.replace("%APP_VERSION%", `v${pkg.version}`);
+      },
+    },
     ...(useHttps ? [basicSsl()] : []),
     VitePWA({
       registerType: "autoUpdate",
