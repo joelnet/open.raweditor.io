@@ -11,17 +11,42 @@ const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const MIN_CROP_PX = 24; // display px — keeps the box and handles grabbable
 const FULL_RECT = Object.freeze({ x: 0, y: 0, w: 1, h: 1 });
 
-// Aspect presets: label + w/h ratio. null = freeform, "orig" = the image's
-// own ratio. Non-square ratios follow the frame orientation (3:2 on a
-// portrait image means 2:3).
+// Aspect presets: label + w:h pair. null = freeform, "orig" = the image's
+// own ratio. Non-square ratios follow the frame orientation on first pick
+// (3:2 on a portrait image means 2:3); clicking the active chip again flips
+// the orientation.
 const PRESETS = /** @type {const} */ ([
   ["FREE", null],
   ["ORIG", "orig"],
-  ["1:1", 1],
-  ["3:2", 3 / 2],
-  ["4:3", 4 / 3],
-  ["16:9", 16 / 9],
+  ["1:1", [1, 1]],
+  ["3:2", [3, 2]],
+  ["4:3", [4, 3]],
+  ["16:9", [16, 9]],
 ]);
+
+const CUSTOM_RATIO_KEY = "raw-editor.crop-custom-ratio";
+
+/**
+ * Parse a user-typed ratio like "5:4" (also accepts "5/4", "5x4", "5,4",
+ * "5 4", decimals like "1.85:1").
+ * @param {string} text
+ * @returns {[number, number] | null}
+ */
+export function parseRatio(text) {
+  const m = text
+    .trim()
+    .match(/^(\d+(?:\.\d+)?)\s*[:/x,\s]\s*(\d+(?:\.\d+)?)$/i);
+  if (!m) return null;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (!(a > 0) || !(b > 0)) return null;
+  return [a, b];
+}
+
+/** @param {[number, number]} pair */
+function ratioLabel(pair) {
+  return `${pair[0]}:${pair[1]}`;
+}
 
 /**
  * @param {string} tag
@@ -66,16 +91,153 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   const chips = el("div", "crop-chips");
   /** @type {HTMLButtonElement[]} */
   const chipButtons = [];
-  for (const [label, value] of PRESETS) {
+  /** @type {(() => void)[]} restore a chip's label/orientation to its base */
+  const chipResets = [];
+
+  /** @param {HTMLButtonElement} chip */
+  function activateChip(chip) {
+    for (const c of chipButtons) {
+      c.classList.toggle("active", c === chip);
+      if (c.hasAttribute("aria-pressed"))
+        c.setAttribute("aria-pressed", String(c === chip));
+    }
+  }
+
+  /** Lock the aspect to `pair` and refit the rect.
+   * @param {HTMLButtonElement} chip @param {[number, number]} pair */
+  function applyPair(chip, pair) {
+    activateChip(chip);
+    enterMode();
+    aspect = pair[0] / pair[1];
+    setRectPx(fitAspect(rectPx(), aspect, dispW, dispH));
+  }
+
+  /**
+   * @param {(typeof PRESETS)[number][0]} label
+   * @param {(typeof PRESETS)[number][1]} base
+   */
+  function addChip(label, base) {
     const chip = /** @type {HTMLButtonElement} */ (el("button", "chip", label));
     chip.type = "button";
     chip.disabled = true;
-    chip.setAttribute("aria-pressed", String(value === null));
-    if (value === null) chip.classList.add("active");
-    chip.addEventListener("click", () => selectPreset(value, chip));
+    chip.setAttribute("aria-pressed", String(base === null));
+    if (base === null) chip.classList.add("active");
+    /** @type {[number, number] | null} currently applied orientation */
+    let pair = null;
+    chip.addEventListener("click", () => {
+      if (!enabled || imgW === 0) return;
+      if (base === null) {
+        activateChip(chip);
+        aspect = null;
+        enterMode();
+        return;
+      }
+      if (chip.classList.contains("active") && pair) {
+        pair = [pair[1], pair[0]]; // re-click flips orientation
+      } else if (base === "orig") {
+        pair = [imgW, imgH];
+      } else {
+        // landscape presets follow the frame orientation on first pick
+        pair = imgH > imgW ? [base[1], base[0]] : [base[0], base[1]];
+      }
+      if (base !== "orig") chip.textContent = ratioLabel(pair);
+      applyPair(chip, pair);
+    });
+    chipResets.push(() => {
+      pair = null;
+      chip.textContent = label;
+    });
     chipButtons.push(chip);
     chips.append(chip);
+    return chip;
   }
+
+  const freeChip = addChip(PRESETS[0][0], PRESETS[0][1]);
+  for (const [label, base] of PRESETS.slice(1)) addChip(label, base);
+
+  // --- custom ratio: a "?:?" chip opens an inline editor; the entered
+  // ratio (kept in localStorage) shows as its own chip beside it ---
+
+  /** @type {[number, number] | null} the saved custom ratio */
+  let customPair = parseRatio(localStorage.getItem(CUSTOM_RATIO_KEY) ?? "");
+  /** @type {[number, number] | null} currently applied orientation */
+  let customCurrent = null;
+  const customChip = /** @type {HTMLButtonElement} */ (
+    el("button", "chip", customPair ? ratioLabel(customPair) : "")
+  );
+  customChip.type = "button";
+  customChip.disabled = true;
+  customChip.hidden = !customPair;
+  customChip.setAttribute("aria-pressed", "false");
+  const editChip = /** @type {HTMLButtonElement} */ (
+    el("button", "chip", "?:?")
+  );
+  editChip.type = "button";
+  editChip.disabled = true;
+  editChip.title = "Set a custom ratio";
+
+  function openCustomEditor() {
+    if (!enabled || editChip.hidden) return; // hidden = already editing
+    const input = /** @type {HTMLInputElement} */ (
+      el("input", "chip chip-input")
+    );
+    input.type = "text";
+    input.placeholder = "W:H";
+    input.value = customPair ? ratioLabel(customPair) : "";
+    editChip.hidden = true;
+    editChip.after(input);
+    let closed = false;
+    const close = () => {
+      if (closed) return; // input.remove() re-enters via its blur handler
+      closed = true;
+      input.remove();
+      editChip.hidden = false;
+    };
+    input.addEventListener("keydown", (e) => {
+      // keep Enter/Escape from committing/cancelling crop mode (onKey)
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        close();
+      } else if (e.key === "Enter") {
+        const pair = parseRatio(input.value);
+        if (!pair) {
+          input.classList.add("invalid");
+          input.select();
+          return;
+        }
+        customPair = pair;
+        localStorage.setItem(CUSTOM_RATIO_KEY, ratioLabel(pair));
+        customChip.textContent = ratioLabel(pair);
+        customChip.hidden = false;
+        close();
+        if (enabled && imgW !== 0) {
+          customCurrent = [pair[0], pair[1]];
+          applyPair(customChip, customCurrent);
+        }
+      }
+    });
+    input.addEventListener("input", () => input.classList.remove("invalid"));
+    input.addEventListener("blur", close);
+    input.focus();
+    input.select();
+  }
+
+  customChip.addEventListener("click", () => {
+    if (!enabled || imgW === 0 || !customPair) return;
+    customCurrent =
+      customChip.classList.contains("active") && customCurrent
+        ? [customCurrent[1], customCurrent[0]] // re-click flips orientation
+        : [customPair[0], customPair[1]];
+    customChip.textContent = ratioLabel(customCurrent);
+    applyPair(customChip, customCurrent);
+  });
+  editChip.addEventListener("click", openCustomEditor);
+  chipResets.push(() => {
+    customCurrent = null;
+    if (customPair) customChip.textContent = ratioLabel(customPair);
+  });
+  chipButtons.push(customChip, editChip);
+  chips.append(customChip, editChip);
   const actions = el("div", "crop-actions");
   const cropBtn = /** @type {HTMLButtonElement} */ (el("button", "", "Crop"));
   const resetBtn = /** @type {HTMLButtonElement} */ (el("button", "", "Reset"));
@@ -191,33 +353,9 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
     handlers.onModeChange(false);
   }
 
-  /**
-   * @param {(typeof PRESETS)[number][1]} value
-   * @param {HTMLButtonElement} chip
-   */
-  function selectPreset(value, chip) {
-    if (!enabled || imgW === 0) return;
-    for (const c of chipButtons) {
-      c.classList.toggle("active", c === chip);
-      c.setAttribute("aria-pressed", String(c === chip));
-    }
-    enterMode(); // picking a ratio means "start cropping"
-    if (value === null) {
-      aspect = null;
-      return;
-    }
-    let ratio = value === "orig" ? imgW / imgH : value;
-    if (value !== "orig" && imgH > imgW && ratio !== 1) ratio = 1 / ratio;
-    aspect = ratio;
-    setRectPx(fitAspect(rectPx(), ratio, dispW, dispH));
-  }
-
   function setChipsToFree() {
-    for (const c of chipButtons) {
-      const isFree = c.textContent === "FREE";
-      c.classList.toggle("active", isFree);
-      c.setAttribute("aria-pressed", String(isFree));
-    }
+    for (const reset of chipResets) reset();
+    activateChip(freeChip);
     aspect = null;
   }
 

@@ -315,6 +315,27 @@ button:disabled {
   border-color: var(--accent-blue);
 }
 
+.crop-chips .chip-input {
+  width: 58px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  padding: 3px 6px;
+  color: var(--text);
+  background: var(--bg-deep);
+  border: 1px solid var(--accent-blue);
+  border-radius: 3px;
+  outline: none;
+}
+
+.crop-chips .chip-input::placeholder {
+  color: var(--muted);
+}
+
+.crop-chips .chip-input.invalid {
+  border-color: var(--accent-red);
+}
+
 .crop-actions {
   display: flex;
   gap: 6px;
