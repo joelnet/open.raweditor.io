@@ -34,7 +34,7 @@ function el(tag, className, text) {
 /**
  * @param {HTMLElement} container scrollable column the sections render into
  * @param {import("../state.js").Store} store
- * @param {{ onExport: (format: "png" | "jpeg") => void,
+ * @param {{ onExport: (format: "png" | "jpeg" | "dng") => void,
  *           onBypassChange: () => void,
  *           onAuto: (title: string) => void,
  *           onRevert: () => void }} handlers
@@ -157,11 +157,18 @@ export function buildPanel(
   const jpgBtn = /** @type {HTMLButtonElement} */ (
     el("button", "", "Export JPG")
   );
+  const dngBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Export DNG")
+  );
+  let dngExportAvailable = false;
   pngBtn.disabled = true;
   jpgBtn.disabled = true;
+  dngBtn.disabled = true;
+  dngBtn.title = "DNG export is available for source DNG files";
   pngBtn.addEventListener("click", () => onExport("png"));
   jpgBtn.addEventListener("click", () => onExport("jpeg"));
-  exportRow.append(pngBtn, jpgBtn);
+  dngBtn.addEventListener("click", () => onExport("dng"));
+  exportRow.append(pngBtn, jpgBtn, dngBtn);
   exportBody.append(exportRow);
   exportSection.append(exportBody);
 
@@ -211,7 +218,16 @@ export function buildPanel(
       }
       pngBtn.disabled = !enabled;
       jpgBtn.disabled = !enabled;
+      dngBtn.disabled = !enabled || !dngExportAvailable;
       revertBtn.disabled = !enabled;
+    },
+    /** @param {boolean} available */
+    setDngExportAvailable(available) {
+      dngExportAvailable = available;
+      dngBtn.disabled = !panelEnabled || !available;
+      dngBtn.title = available
+        ? "Export original DNG source; edits are not baked in"
+        : "DNG export is available for source DNG files";
     },
     /**
      * Settings with bypassed sections' sliders treated as zero — what the
@@ -235,15 +251,18 @@ export function buildPanel(
     },
     /**
      * @param {boolean} busy
-     * @param {"png" | "jpeg"} [format] which export is running
+     * @param {"png" | "jpeg" | "dng"} [format] which export is running
      */
     setExportBusy(busy, format) {
       pngBtn.disabled = busy;
       jpgBtn.disabled = busy;
+      dngBtn.disabled = busy || !panelEnabled || !dngExportAvailable;
       pngBtn.textContent =
         busy && format === "png" ? "Exporting…" : "Export PNG";
       jpgBtn.textContent =
         busy && format === "jpeg" ? "Exporting…" : "Export JPG";
+      dngBtn.textContent =
+        busy && format === "dng" ? "Exporting…" : "Export DNG";
     },
   };
 }

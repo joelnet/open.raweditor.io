@@ -42,6 +42,11 @@ let previewSize = null;
 let previewImage = null;
 let opening = false;
 
+/** @param {File} file */
+function isDngFile(file) {
+  return /\.dng$/i.test(file.name);
+}
+
 // --- preview rendering, coalesced to one draw per frame ---
 
 let renderQueued = false;
@@ -138,6 +143,7 @@ async function openFile(file) {
     store.set({ ...ZERO_SETTINGS });
     layout();
     panel.setEnabled(true);
+    panel.setDngExportAvailable(isDngFile(file));
     masks.setEnabled(true);
     histo.setHasImage(true);
     histo.setExif(meta);
@@ -168,15 +174,27 @@ async function openFile(file) {
 
 // --- export ---
 
-/** @param {"png" | "jpeg"} format */
+/** @param {"png" | "jpeg" | "dng"} format */
 async function onExport(format) {
   if (!currentFile || opening) return;
   const file = currentFile;
+  if (format === "dng" && !isDngFile(file)) {
+    status.setError("DNG export is only available for source DNG files.");
+    return;
+  }
   const settings = effectiveSettings();
   const cropRect = crop.rect();
   const geometry = crop.geometry();
   panel.setExportBusy(true, format);
   try {
+    if (format === "dng") {
+      const name = file.name.replace(/\.[^.]+$/, ".dng");
+      downloadBlob(file, name);
+      status.setProgress(
+        `Exported original ${name} (${(file.size / 1e6).toFixed(1)}MB, edits not baked in)`,
+      );
+      return;
+    }
     status.setProgress("Export: decoding full resolution…");
     const bytes = new Uint8Array(await file.arrayBuffer());
     const { image } = await decoder.decode(bytes, {});
