@@ -547,6 +547,32 @@ button:disabled {
   border-bottom: 1px solid var(--panel-edge);
 }
 
+/* ---- per-section auto: one-click computed settings for the section ---- */
+
+.section-auto {
+  margin: -3px 0 -3px auto; /* right-align with the eye; don't grow header */
+  padding: 2px 7px;
+  background: none;
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.section-auto:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.section-auto:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* ---- per-section eye: bypass the section's edits for a before/after ---- */
 
 .section-eye {

@@ -3,6 +3,7 @@ import { boxDownscaleToRgba16 } from "./decode/downscale.js";
 import { createRenderer, FULL_VIEW } from "./gl/renderer.js";
 import { createStore } from "./state.js";
 import { ZERO_SETTINGS, cropPixelRect } from "./tone/tone-math.js";
+import { autoWhiteBalance, autoTone } from "./tone/auto.js";
 import { buildPanel } from "./ui/panel.js";
 import { initHistogram } from "./ui/histogram.js";
 import { initCrop } from "./ui/crop.js";
@@ -34,6 +35,9 @@ const renderer = createRenderer(canvas);
 let currentFile = null;
 /** @type {{ width: number, height: number } | null} */
 let previewSize = null;
+/** Preview pixels kept for image statistics (auto WB / auto tone). */
+/** @type {{ pixels: Uint16Array, width: number, height: number } | null} */
+let previewImage = null;
 let opening = false;
 
 // --- preview rendering, coalesced to one draw per frame ---
@@ -98,6 +102,7 @@ async function openFile(file) {
     });
     const preview = boxDownscaleToRgba16(image);
     renderer.setImage(preview);
+    previewImage = preview;
     previewSize = { width: preview.width, height: preview.height };
     currentFile = file;
     canvas.hidden = false;
@@ -197,9 +202,28 @@ const zoom = initZoom(canvas, viewport, {
   getImageSize: () => previewSize,
   onChange: queueRender,
 });
+// Auto WB / auto tone: image statistics over the cropped preview. Auto tone
+// runs downstream of white balance, so it sees the current effective WB.
+/** @param {string} title */
+function onAuto(title) {
+  if (!previewImage) return;
+  const rect = cropPixelRect(
+    crop.rect(),
+    previewImage.width,
+    previewImage.height,
+  );
+  if (title === "WHITE BALANCE") {
+    store.set(autoWhiteBalance(previewImage, rect));
+  } else if (title === "TONE") {
+    const { temp, tint } = panel.effectiveSettings(store.get());
+    store.set(autoTone(previewImage, rect, { temp, tint }));
+  }
+}
+
 const panel = buildPanel(panelScroll, store, {
   onExport,
   onBypassChange: queueRender,
+  onAuto,
 });
 const dropzone = initDropzone({
   onFile: openFile,

@@ -34,9 +34,14 @@ function el(tag, className, text) {
  * @param {HTMLElement} container scrollable column the sections render into
  * @param {import("../state.js").Store} store
  * @param {{ onExport: (format: "png" | "jpeg") => void,
- *           onBypassChange: () => void }} handlers
+ *           onBypassChange: () => void,
+ *           onAuto: (title: string) => void }} handlers
  */
-export function buildPanel(container, store, { onExport, onBypassChange }) {
+export function buildPanel(
+  container,
+  store,
+  { onExport, onBypassChange, onAuto },
+) {
   /** @type {Map<string, { input: HTMLInputElement, value: HTMLElement,
    *                        decimals: number, scale: number }>} */
   const rows = new Map();
@@ -46,7 +51,7 @@ export function buildPanel(container, store, { onExport, onBypassChange }) {
   /** @type {Set<string>} */
   const bypassed = new Set();
   /** @typedef {{ title: string, section: HTMLElement, eye: HTMLButtonElement,
-   *              inputs: HTMLInputElement[] }} SectionEntry */
+   *              auto: HTMLButtonElement, inputs: HTMLInputElement[] }} SectionEntry */
   /** @type {SectionEntry[]} */
   const entries = [];
   let panelEnabled = false;
@@ -58,6 +63,7 @@ export function buildPanel(container, store, { onExport, onBypassChange }) {
     entry.section.classList.toggle("bypassed", off);
     entry.eye.innerHTML = off ? EYE_CLOSED : EYE_OPEN;
     entry.eye.setAttribute("aria-pressed", String(!off));
+    entry.auto.disabled = !panelEnabled || off;
     for (const input of entry.inputs) input.disabled = !panelEnabled || off;
   }
 
@@ -66,18 +72,25 @@ export function buildPanel(container, store, { onExport, onBypassChange }) {
   for (const { title, sliders } of SECTIONS) {
     const section = el("div", "section");
     const header = el("div", "section-header", title);
+    const auto = /** @type {HTMLButtonElement} */ (
+      el("button", "section-auto", "AUTO")
+    );
+    auto.type = "button";
+    auto.disabled = true;
+    auto.setAttribute("aria-label", `Auto ${title.toLowerCase()}`);
     const eye = /** @type {HTMLButtonElement} */ (el("button", "section-eye"));
     eye.type = "button";
     eye.disabled = true;
     eye.innerHTML = EYE_OPEN;
     eye.setAttribute("aria-label", `Toggle ${title.toLowerCase()} edits`);
     eye.setAttribute("aria-pressed", "true");
-    header.append(eye);
+    header.append(auto, eye);
     section.append(header);
 
     /** @type {SectionEntry} */
-    const entry = { title, section, eye, inputs: [] };
+    const entry = { title, section, eye, auto, inputs: [] };
     entries.push(entry);
+    auto.addEventListener("click", () => onAuto(title));
     eye.addEventListener("click", () => {
       setBypassed(entry, !bypassed.has(title));
       onBypassChange();
@@ -158,6 +171,7 @@ export function buildPanel(container, store, { onExport, onBypassChange }) {
       panelEnabled = enabled;
       for (const entry of entries) {
         entry.eye.disabled = !enabled;
+        entry.auto.disabled = !enabled || bypassed.has(entry.title);
         for (const input of entry.inputs) {
           input.disabled = !enabled || bypassed.has(entry.title);
         }
