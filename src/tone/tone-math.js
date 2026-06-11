@@ -7,7 +7,8 @@ import { TONE, INPUT_TRANSFER, LUMA } from "./constants.js";
  * Tone settings, all pre-scaled: exposure in EV (±5), the rest in [-1, +1].
  * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
  *             highlights: number, shadows: number, whites: number,
- *             blacks: number }} ToneSettings
+ *             blacks: number, vibrance: number,
+ *             saturation: number }} ToneSettings
  */
 
 export const ZERO_SETTINGS = Object.freeze({
@@ -19,6 +20,8 @@ export const ZERO_SETTINGS = Object.freeze({
   shadows: 0,
   whites: 0,
   blacks: 0,
+  vibrance: 0,
+  saturation: 0,
 });
 
 /**
@@ -116,7 +119,26 @@ export function applyTonePixel(r, g, b, s) {
     b *= gain;
   }
 
-  // 6. clamp + display encode
+  // 6. vibrance / saturation: scale chroma around Rec.709 luma. Vibrance is
+  // weighted by 1 - HSV saturation so already-vivid pixels are protected
+  // (darktable velvia-style); negative vibrance tames the most saturated
+  // colors first.
+  r = Math.min(Math.max(r, 0), 1);
+  g = Math.min(Math.max(g, 0), 1);
+  b = Math.min(Math.max(b, 0), 1);
+  if (s.vibrance !== 0 || s.saturation !== 0) {
+    const y = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const sat = mx > 0 ? (mx - mn) / mx : 0;
+    const w = s.vibrance >= 0 ? 1 - sat : sat;
+    const factor = Math.max((1 + s.saturation) * (1 + s.vibrance * w), 0);
+    r = y + (r - y) * factor;
+    g = y + (g - y) * factor;
+    b = y + (b - y) * factor;
+  }
+
+  // 7. clamp + display encode
   return [
     srgbEncode(Math.min(Math.max(r, 0), 1)),
     srgbEncode(Math.min(Math.max(g, 0), 1)),

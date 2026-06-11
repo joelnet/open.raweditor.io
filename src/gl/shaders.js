@@ -1,8 +1,8 @@
 // GLSL for the preview path. The fragment shader mirrors tone-math.js
 // step-for-step (white balance → exposure → whites/blacks → contrast →
-// highlights/shadows → sRGB encode); constants are interpolated from
-// tone/constants.js so the GPU preview and the CPU export can never drift
-// apart.
+// highlights/shadows → vibrance/saturation → sRGB encode); constants are
+// interpolated from tone/constants.js so the GPU preview and the CPU
+// export can never drift apart.
 
 import { TONE, INPUT_TRANSFER, LUMA } from "../tone/constants.js";
 
@@ -51,6 +51,8 @@ uniform float u_highlights;     // [-1, 1]
 uniform float u_shadows;        // [-1, 1]
 uniform float u_whites;         // [-1, 1]
 uniform float u_blacks;         // [-1, 1]
+uniform float u_vibrance;       // [-1, 1]
+uniform float u_saturation;     // [-1, 1]
 
 in vec2 v_uv;
 out vec4 outColor;
@@ -98,7 +100,22 @@ void main() {
   float mH = smoothstep(${f(TONE.HIGHLIGHT_MASK[0])}, ${f(TONE.HIGHLIGHT_MASK[1])}, ye);
   rgb *= exp2(${f(TONE.SH_STRENGTH_EV)} * (u_shadows * mS + u_highlights * mH));
 
-  // 6. clamp + display encode
+  // 6. vibrance / saturation: scale chroma around Rec.709 luma. Vibrance is
+  // weighted by 1 - HSV saturation so already-vivid pixels are protected
+  // (darktable velvia-style); negative vibrance tames the most saturated
+  // colors first.
+  rgb = clamp(rgb, 0.0, 1.0);
+  if (u_vibrance != 0.0 || u_saturation != 0.0) {
+    y = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
+    float mx = max(rgb.r, max(rgb.g, rgb.b));
+    float mn = min(rgb.r, min(rgb.g, rgb.b));
+    float sat = mx > 0.0 ? (mx - mn) / mx : 0.0;
+    float w = u_vibrance >= 0.0 ? 1.0 - sat : sat;
+    float factor = max((1.0 + u_saturation) * (1.0 + u_vibrance * w), 0.0);
+    rgb = vec3(y) + (rgb - vec3(y)) * factor;
+  }
+
+  // 7. clamp + display encode
   outColor = vec4(srgbEncode(clamp(rgb, 0.0, 1.0)), 1.0);
 }
 `;

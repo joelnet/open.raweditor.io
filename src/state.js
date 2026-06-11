@@ -88,10 +88,32 @@ export const TONE_SLIDERS = /** @type {const} */ ([
   },
 ]);
 
-/** Sidebar sections, in display order. */
+export const COLOR_SLIDERS = /** @type {const} */ ([
+  {
+    key: "vibrance",
+    label: "VIBRANCE",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "saturation",
+    label: "SATURATION",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+]);
+
+/** Sidebar sections, in display order. `auto` adds an AUTO button. */
 export const SECTIONS = /** @type {const} */ ([
-  { title: "WHITE BALANCE", sliders: WB_SLIDERS },
-  { title: "TONE", sliders: TONE_SLIDERS },
+  { title: "WHITE BALANCE", sliders: WB_SLIDERS, auto: true },
+  { title: "TONE", sliders: TONE_SLIDERS, auto: true },
+  { title: "COLOR", sliders: COLOR_SLIDERS, auto: false },
 ]);
 
 export function createStore() {

@@ -21,6 +21,8 @@ const UNIFORMS = /** @type {const} */ ([
   "shadows",
   "whites",
   "blacks",
+  "vibrance",
+  "saturation",
 ]);
 
 /**

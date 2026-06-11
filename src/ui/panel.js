@@ -69,7 +69,7 @@ export function buildPanel(
 
   /** @type {HTMLElement[]} */
   const sections = [];
-  for (const { title, sliders } of SECTIONS) {
+  for (const { title, sliders, auto: hasAuto } of SECTIONS) {
     const section = el("div", "section");
     const header = el("div", "section-header", title);
     const auto = /** @type {HTMLButtonElement} */ (
@@ -84,7 +84,8 @@ export function buildPanel(
     eye.innerHTML = EYE_OPEN;
     eye.setAttribute("aria-label", `Toggle ${title.toLowerCase()} edits`);
     eye.setAttribute("aria-pressed", "true");
-    header.append(auto, eye);
+    if (hasAuto) header.append(auto);
+    header.append(eye);
     section.append(header);
 
     /** @type {SectionEntry} */

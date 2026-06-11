@@ -130,9 +130,93 @@ test("highlights cut bright pixels, leave dark pixels alone", () => {
   assert.ok(Math.abs(darkDown - darkBase) < EPS);
 });
 
+test("saturation -1 produces grayscale at Rec.709 luma", () => {
+  const [r, g, b] = applyTonePixel(0.4, 0.2, 0.1, settings({ saturation: -1 }));
+  const y = 0.2126 * 0.4 + 0.7152 * 0.2 + 0.0722 * 0.1;
+  const expected = srgbEncode(y);
+  assert.ok(Math.abs(r - expected) < EPS);
+  assert.equal(r, g);
+  assert.equal(g, b);
+});
+
+test("saturation +1 doubles the distance from luma", () => {
+  const s = settings({ saturation: 1 });
+  const [r, , b] = applyTonePixel(0.3, 0.25, 0.2, s);
+  const y = 0.2126 * 0.3 + 0.7152 * 0.25 + 0.0722 * 0.2;
+  assert.ok(Math.abs(r - srgbEncode(y + (0.3 - y) * 2)) < EPS);
+  assert.ok(Math.abs(b - srgbEncode(y + (0.2 - y) * 2)) < EPS);
+});
+
+test("saturation and vibrance leave neutral gray unchanged", () => {
+  for (const v of [0.05, 0.18, 0.7]) {
+    const [base] = applyTonePixel(v, v, v, ZERO_SETTINGS);
+    for (const patch of [
+      { saturation: 1 },
+      { saturation: -1 },
+      { vibrance: 1 },
+      { vibrance: -1 },
+    ]) {
+      const [r, g, b] = applyTonePixel(v, v, v, settings(patch));
+      assert.ok(Math.abs(r - base) < EPS, JSON.stringify(patch));
+      assert.equal(r, g);
+      assert.equal(g, b);
+    }
+  }
+});
+
+/** Chroma proxy: max - min of the sRGB-encoded output channels. */
+function chroma(/** @type {[number, number, number]} */ out) {
+  return Math.max(...out) - Math.min(...out);
+}
+
+test("positive vibrance boosts muted colors more than vivid ones", () => {
+  const s = settings({ vibrance: 1 });
+  const muted = /** @type {[number, number, number]} */ ([0.3, 0.27, 0.24]);
+  const vivid = /** @type {[number, number, number]} */ ([0.5, 0.15, 0.05]);
+  const gain = (/** @type {[number, number, number]} */ px) =>
+    chroma(applyTonePixel(...px, s)) /
+    chroma(applyTonePixel(...px, ZERO_SETTINGS));
+  assert.ok(gain(muted) > gain(vivid));
+  assert.ok(gain(vivid) >= 1 - EPS); // never desaturates
+});
+
+test("negative vibrance tames vivid colors more than muted ones", () => {
+  const s = settings({ vibrance: -1 });
+  const muted = /** @type {[number, number, number]} */ ([0.3, 0.27, 0.24]);
+  const vivid = /** @type {[number, number, number]} */ ([0.5, 0.15, 0.05]);
+  const keep = (/** @type {[number, number, number]} */ px) =>
+    chroma(applyTonePixel(...px, s)) /
+    chroma(applyTonePixel(...px, ZERO_SETTINGS));
+  assert.ok(keep(vivid) < keep(muted));
+  assert.ok(keep(muted) <= 1 + EPS); // never saturates
+});
+
+test("vibrance and saturation preserve Rec.709 luma", () => {
+  const luma = (/** @type {[number, number, number]} */ [r, g, b]) =>
+    0.2126 * srgbDecode(r) + 0.7152 * srgbDecode(g) + 0.0722 * srgbDecode(b);
+  const base = luma(applyTonePixel(0.3, 0.25, 0.2, ZERO_SETTINGS));
+  for (const patch of [
+    { saturation: 0.5 },
+    { saturation: -0.5 },
+    { vibrance: 0.5 },
+    { vibrance: -0.5 },
+  ]) {
+    const out = luma(applyTonePixel(0.3, 0.25, 0.2, settings(patch)));
+    assert.ok(Math.abs(out - base) < 1e-6, JSON.stringify(patch));
+  }
+});
+
 test("output stays in [0,1] under extreme settings", () => {
   const extremes = [
-    settings({ exposure: 5, contrast: 1, shadows: 1, blacks: 1, temp: 1 }),
+    settings({
+      exposure: 5,
+      contrast: 1,
+      shadows: 1,
+      blacks: 1,
+      temp: 1,
+      saturation: 1,
+      vibrance: 1,
+    }),
     settings({
       exposure: -5,
       contrast: -1,
@@ -140,14 +224,21 @@ test("output stays in [0,1] under extreme settings", () => {
       whites: -1,
       temp: -1,
       tint: 1,
+      saturation: -1,
+      vibrance: -1,
     }),
-    settings({ exposure: 5, whites: 1, highlights: 1, tint: -1 }),
+    settings({ exposure: 5, whites: 1, highlights: 1, tint: -1, vibrance: 1 }),
   ];
   for (const s of extremes) {
     for (const v of [0, 0.18, 1, 4]) {
-      const out = applyTonePixel(v, v, v, s);
-      for (const ch of out) {
-        assert.ok(ch >= 0 && ch <= 1, `settings ${JSON.stringify(s)} v=${v}`);
+      for (const px of [
+        [v, v, v],
+        [v, v * 0.5, v * 0.1],
+      ]) {
+        const out = applyTonePixel(px[0], px[1], px[2], s);
+        for (const ch of out) {
+          assert.ok(ch >= 0 && ch <= 1, `settings ${JSON.stringify(s)} v=${v}`);
+        }
       }
     }
   }
@@ -167,18 +258,23 @@ test("toneMapRows matches applyTonePixel and fills alpha (3-channel u16)", () =>
     0, 0, 0, 65535, 65535, 65535, 11796, 23593, 35389, 6553, 6553, 6553,
   ]);
   const image = { data, width, height, colors: 3, bits: 16 };
-  const out = new Uint8ClampedArray(width * height * 4);
-  toneMapRows(image, ZERO_SETTINGS, out, 0, height);
-  for (let p = 0; p < 4; p++) {
-    const r = data[p * 3] / 65535;
-    const g = data[p * 3 + 1] / 65535;
-    const b = data[p * 3 + 2] / 65535;
-    const [er, eg, eb] = applyTonePixel(r, g, b, ZERO_SETTINGS);
-    const expected = new Uint8ClampedArray([er * 255, eg * 255, eb * 255]);
-    assert.equal(out[p * 4], expected[0]);
-    assert.equal(out[p * 4 + 1], expected[1]);
-    assert.equal(out[p * 4 + 2], expected[2]);
-    assert.equal(out[p * 4 + 3], 255);
+  for (const s of [
+    ZERO_SETTINGS,
+    settings({ vibrance: 0.5, saturation: -0.3 }),
+  ]) {
+    const out = new Uint8ClampedArray(width * height * 4);
+    toneMapRows(image, s, out, 0, height);
+    for (let p = 0; p < 4; p++) {
+      const r = data[p * 3] / 65535;
+      const g = data[p * 3 + 1] / 65535;
+      const b = data[p * 3 + 2] / 65535;
+      const [er, eg, eb] = applyTonePixel(r, g, b, s);
+      const expected = new Uint8ClampedArray([er * 255, eg * 255, eb * 255]);
+      assert.equal(out[p * 4], expected[0]);
+      assert.equal(out[p * 4 + 1], expected[1]);
+      assert.equal(out[p * 4 + 2], expected[2]);
+      assert.equal(out[p * 4 + 3], 255);
+    }
   }
 });
 
