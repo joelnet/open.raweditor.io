@@ -125,22 +125,59 @@ export function applyTonePixel(r, g, b, s) {
 }
 
 /**
- * Tone-map a row range of a decoded LibRaw image into an RGBA8 buffer.
- * Lets the caller (export worker) chunk work and report progress.
+ * Normalized crop rect in image UV space (x/y/w/h in [0,1], y = 0 at the
+ * top) — the same convention as the renderer's ViewRect.
+ * @typedef {{ x: number, y: number, w: number, h: number }} CropRect
+ */
+
+/**
+ * Map a normalized crop rect onto an image's pixel grid. Always returns at
+ * least 1×1 and stays inside the image regardless of rounding; a null crop
+ * (or the full-frame rect) yields the whole image.
+ * @param {CropRect | null | undefined} crop
+ * @param {number} width
+ * @param {number} height
+ * @returns {{ x: number, y: number, w: number, h: number }} pixel rect
+ */
+export function cropPixelRect(crop, width, height) {
+  if (!crop) return { x: 0, y: 0, w: width, h: height };
+  const clamp = (
+    /** @type {number} */ v,
+    /** @type {number} */ lo,
+    /** @type {number} */ hi,
+  ) => Math.min(Math.max(v, lo), hi);
+  const x0 = clamp(Math.round(crop.x * width), 0, width - 1);
+  const y0 = clamp(Math.round(crop.y * height), 0, height - 1);
+  const x1 = clamp(Math.round((crop.x + crop.w) * width), x0 + 1, width);
+  const y1 = clamp(Math.round((crop.y + crop.h) * height), y0 + 1, height);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/**
+ * Tone-map a row range of a decoded LibRaw image into an RGBA8 buffer,
+ * optionally windowed to a pixel crop rect. `out` is rect-sized
+ * (rect.w × rect.h × 4) and rowStart/rowEnd index rows of the rect, not
+ * the source image. Lets the caller (export worker) chunk work and report
+ * progress.
  * @param {{ data: Uint16Array | Uint8Array, width: number, height: number,
  *           colors: number, bits: number }} image
  * @param {ToneSettings} settings
- * @param {Uint8ClampedArray} out RGBA8, width*height*4 bytes
- * @param {number} rowStart inclusive
- * @param {number} rowEnd exclusive
+ * @param {Uint8ClampedArray} out RGBA8, rect.w*rect.h*4 bytes
+ * @param {number} rowStart inclusive, in rect rows
+ * @param {number} rowEnd exclusive, in rect rows
+ * @param {{ x: number, y: number, w: number, h: number }} [rect] pixel
+ *   crop; defaults to the full image
  */
-export function toneMapRows(image, settings, out, rowStart, rowEnd) {
+export function toneMapRows(image, settings, out, rowStart, rowEnd, rect) {
   const { data, width, colors, bits } = image;
+  const rx = rect ? rect.x : 0;
+  const ry = rect ? rect.y : 0;
+  const rw = rect ? rect.w : width;
   const maxVal = bits === 16 ? 65535 : 255;
   for (let yRow = rowStart; yRow < rowEnd; yRow++) {
-    let src = yRow * width * colors;
-    let dst = yRow * width * 4;
-    for (let x = 0; x < width; x++) {
+    let src = ((yRow + ry) * width + rx) * colors;
+    let dst = yRow * rw * 4;
+    for (let x = 0; x < rw; x++) {
       const r = decodeInput(data[src] / maxVal);
       const g = decodeInput(data[src + 1] / maxVal);
       const b = decodeInput(data[src + 2] / maxVal);

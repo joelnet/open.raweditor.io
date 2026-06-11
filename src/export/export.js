@@ -7,16 +7,18 @@ export function createExporter() {
 
   return {
     /**
-     * Tone-map and encode a decoded image. The image's pixel buffer is
-     * transferred (detached) — the caller must not reuse it.
+     * Tone-map and encode a decoded image, optionally windowed to a
+     * normalized crop rect. The image's pixel buffer is transferred
+     * (detached) — the caller must not reuse it.
      * @param {{ data: Uint16Array | Uint8Array, width: number, height: number,
      *           colors: number, bits: number }} image
      * @param {import("../tone/tone-math.js").ToneSettings} settings
      * @param {"png" | "jpeg"} format
+     * @param {import("../tone/tone-math.js").CropRect | null} crop
      * @param {(done: number, total: number) => void} [onProgress]
      * @returns {Promise<Blob>}
      */
-    exportImage(image, settings, format, onProgress) {
+    exportImage(image, settings, format, crop, onProgress) {
       if (!worker) {
         worker = new Worker(new URL("./worker.js", import.meta.url), {
           type: "module",
@@ -33,7 +35,7 @@ export function createExporter() {
         };
         w.onerror = (e) =>
           reject(new Error(e.message || "export worker error"));
-        w.postMessage({ image, settings, format }, [image.data.buffer]);
+        w.postMessage({ image, settings, format, crop }, [image.data.buffer]);
       });
     },
   };

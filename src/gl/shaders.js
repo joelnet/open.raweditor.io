@@ -11,14 +11,18 @@ const f = (n) => n.toFixed(6);
 
 export const VERTEX_SHADER = `#version 300 es
 // Bufferless fullscreen triangle; v_uv y-flipped so texel row 0 (image top)
-// lands at the top of the canvas.
+// lands at the top of the canvas, then windowed by the view rect so zoom
+// and crop are a pure UV remap (no geometry or texture changes).
+uniform vec2 u_view_offset;  // view rect origin, image UV
+uniform vec2 u_view_scale;   // view rect size, image UV
 out vec2 v_uv;
 void main() {
   vec2 pos = vec2(
     gl_VertexID == 1 ? 3.0 : -1.0,
     gl_VertexID == 2 ? 3.0 : -1.0
   );
-  v_uv = vec2(pos.x * 0.5 + 0.5, 0.5 - pos.y * 0.5);
+  vec2 uv = vec2(pos.x * 0.5 + 0.5, 0.5 - pos.y * 0.5);
+  v_uv = u_view_offset + uv * u_view_scale;
   gl_Position = vec4(pos, 0.0, 1.0);
 }
 `;

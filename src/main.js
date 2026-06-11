@@ -1,10 +1,12 @@
 import { Decoder } from "./decode/client.js";
 import { boxDownscaleToRgba16 } from "./decode/downscale.js";
-import { createRenderer } from "./gl/renderer.js";
+import { createRenderer, FULL_VIEW } from "./gl/renderer.js";
 import { createStore } from "./state.js";
-import { ZERO_SETTINGS } from "./tone/tone-math.js";
+import { ZERO_SETTINGS, cropPixelRect } from "./tone/tone-math.js";
 import { buildPanel } from "./ui/panel.js";
 import { initHistogram } from "./ui/histogram.js";
+import { initCrop } from "./ui/crop.js";
+import { initZoom } from "./ui/zoom.js";
 import { initDropzone } from "./ui/dropzone.js";
 import { initDivider } from "./ui/divider.js";
 import { initElevator } from "./ui/elevator.js";
@@ -43,33 +45,38 @@ function queueRender() {
   requestAnimationFrame(() => {
     renderQueued = false;
     const settings = panel.effectiveSettings(store.get());
-    renderer.render(settings);
-    if (histo.visible()) histo.draw(renderer.computeHistogram(settings));
+    // crop mode shows the full frame under the overlay; otherwise the
+    // zoom/pan window inside the crop. The histogram always reflects the
+    // crop — what an export would contain — regardless of zoom.
+    renderer.render(settings, crop.isActive() ? FULL_VIEW : zoom.view());
+    if (histo.visible()) {
+      histo.draw(renderer.computeHistogram(settings, crop.rect()));
+    }
   });
 }
 store.subscribe(queueRender);
 
-// --- layout: fit canvas to viewport at the preview's aspect ratio ---
+// --- layout: fit canvas to viewport at the visible region's aspect ---
 
 function layout() {
   if (!previewSize || !renderer) return;
   const pad = 24;
+  const rect = crop.isActive() ? FULL_VIEW : crop.rect();
+  const srcW = Math.max(previewSize.width * rect.w, 1);
+  const srcH = Math.max(previewSize.height * rect.h, 1);
   const maxW = Math.max(viewport.clientWidth - pad * 2, 64);
   const maxH = Math.max(viewport.clientHeight - pad * 2, 64);
-  const scale = Math.min(
-    maxW / previewSize.width,
-    maxH / previewSize.height,
-    1,
-  );
-  const cssW = Math.max(1, Math.round(previewSize.width * scale));
-  const cssH = Math.max(1, Math.round(previewSize.height * scale));
+  const scale = Math.min(maxW / srcW, maxH / srcH, 1);
+  const cssW = Math.max(1, Math.round(srcW * scale));
+  const cssH = Math.max(1, Math.round(srcH * scale));
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
   const dpr = window.devicePixelRatio || 1;
   renderer.setSize(
-    Math.min(Math.round(cssW * dpr), previewSize.width),
-    Math.min(Math.round(cssH * dpr), previewSize.height),
+    Math.min(Math.round(cssW * dpr), Math.round(srcW)),
+    Math.min(Math.round(cssH * dpr), Math.round(srcH)),
   );
+  crop.reposition();
   queueRender();
 }
 window.addEventListener("resize", layout);
@@ -81,6 +88,7 @@ async function openFile(file) {
   if (!renderer || opening) return;
   opening = true;
   panel.setEnabled(false);
+  crop.setEnabled(false);
   status.setFile(`Decoding ${file.name}…`);
   status.setProgress("");
   try {
@@ -95,6 +103,9 @@ async function openFile(file) {
     canvas.hidden = false;
     dropzone.setVisible(false);
     panel.resetBypass();
+    crop.setImage(preview.width, preview.height, meta.width, meta.height);
+    zoom.reset();
+    zoom.setEnabled(true);
     store.set({ ...ZERO_SETTINGS });
     layout();
     panel.setEnabled(true);
@@ -117,7 +128,10 @@ async function openFile(file) {
     if (!currentFile) dropzone.setVisible(true);
   } finally {
     opening = false;
-    if (currentFile) panel.setEnabled(true);
+    if (currentFile) {
+      panel.setEnabled(true);
+      crop.setEnabled(true);
+    }
   }
 }
 
@@ -128,16 +142,19 @@ async function onExport(format) {
   if (!currentFile || opening) return;
   const file = currentFile;
   const settings = panel.effectiveSettings(store.get());
+  const cropRect = crop.rect();
   panel.setExportBusy(true, format);
   try {
     status.setProgress("Export: decoding full resolution…");
     const bytes = new Uint8Array(await file.arrayBuffer());
     const { image } = await decoder.decode(bytes, {});
+    const px = cropPixelRect(cropRect, image.width, image.height);
     status.setProgress("Export: applying tone…");
     const blob = await exporter.exportImage(
       image,
       settings,
       format,
+      cropRect,
       (done, total) => {
         status.setProgress(
           `Export: applying tone… ${Math.round((done / total) * 100)}%`,
@@ -148,7 +165,7 @@ async function onExport(format) {
       file.name.replace(/\.[^.]+$/, "") + (format === "jpeg" ? ".jpg" : ".png");
     downloadBlob(blob, name);
     status.setProgress(
-      `Exported ${name} (${image.width}×${image.height}, ${(blob.size / 1e6).toFixed(1)}MB)`,
+      `Exported ${name} (${px.w}×${px.h}, ${(blob.size / 1e6).toFixed(1)}MB)`,
     );
   } catch (err) {
     console.error(err);
@@ -162,8 +179,24 @@ async function onExport(format) {
 
 // --- wiring ---
 
-// Histogram first so its section sits above the panel's slider sections.
+// Section order in the sidebar follows init order: HISTOGRAM, CROP, then
+// the panel's slider sections and EXPORT.
 const histo = initHistogram(panelScroll, viewport, { onToggle: queueRender });
+const crop = initCrop(viewport, canvas, panelScroll, {
+  // in crop mode the canvas shows the full frame, so a rect change only
+  // moves the overlay + histogram; outside it the rect is the visible
+  // region and the canvas aspect must follow
+  onRectChange: () => (crop.isActive() ? queueRender() : layout()),
+  onModeChange: (active) => {
+    zoom.setEnabled(!active && !!previewSize);
+    layout();
+  },
+});
+const zoom = initZoom(canvas, viewport, {
+  getBounds: () => crop.rect(),
+  getImageSize: () => previewSize,
+  onChange: queueRender,
+});
 const panel = buildPanel(panelScroll, store, {
   onExport,
   onBypassChange: queueRender,
