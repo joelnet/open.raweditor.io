@@ -1,9 +1,9 @@
 # raw-editor
 
-A RAW photo editor that runs entirely in the browser. Drop a Sony `.ARW` or
-Fujifilm `.RAF` file, adjust it with Lightroom-style sliders on a live WebGL
-preview, and export a full-resolution PNG or JPG. Files never leave your
-machine — decoding, editing, and export all happen client-side.
+A RAW photo editor that runs entirely in the browser. Drop a Sony `.ARW`,
+Fujifilm `.RAF`, or `.DNG` file, adjust it with Lightroom-style sliders on a
+live WebGL preview, and export a full-resolution PNG or JPG. Files never leave
+your machine — decoding, editing, and export all happen client-side.
 
 ## Features
 
@@ -77,6 +77,21 @@ the URL to auto-load one on startup, e.g. `http://localhost:5173/?open=a7m3.ARW`
 | `npm start`         | serve `dist/` with the Hono server (port 3102)  |
 
 Husky runs lint (which includes typecheck) on commit.
+
+## Deployment
+
+To allow `joel` to restart the production service without `sudo`, install the
+polkit rule:
+
+```sh
+sudo install -o root -g root -m 0644 deploy/50-raw-editor.rules /etc/polkit-1/rules.d/50-raw-editor.rules
+```
+
+Then verify:
+
+```sh
+systemctl restart raw-editor
+```
 
 ## Requirements
 

@@ -150,7 +150,7 @@ async function openFile(file) {
     status.setFile(
       currentFile
         ? `${currentFile.name} — previous image kept`
-        : "No file loaded — drop a Sony .ARW or Fujifilm .RAF",
+        : "No file loaded — drop a Sony .ARW, Fujifilm .RAF, or DNG",
     );
     status.setError(
       `Could not decode ${file.name}: ${/** @type {any} */ (err)?.message ?? err}`,
@@ -290,7 +290,7 @@ const panel = buildPanel(panelScroll, store, {
 const dropzone = initDropzone({
   onFile: openFile,
   onReject: (name) =>
-    status.setError(`${name} is not a supported RAW file (.ARW, .RAF)`),
+    status.setError(`${name} is not a supported RAW file (.ARW, .RAF, .DNG)`),
 });
 initDivider({ onResize: layout });
 initElevator();
@@ -298,7 +298,7 @@ initElevator();
 if (!renderer) {
   status.setError("WebGL2 is not available in this browser — cannot preview.");
 } else {
-  status.setFile("No file loaded — drop a Sony .ARW or Fujifilm .RAF");
+  status.setFile("No file loaded — drop a Sony .ARW, Fujifilm .RAF, or DNG");
   store.set({ ...ZERO_SETTINGS }); // sync slider readouts
 
   // Automation/debug hook: ?open=<sample-name> fetches from /samples/.

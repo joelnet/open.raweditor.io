@@ -1,7 +1,7 @@
 // File intake: browse button, hidden file input, and drag-and-drop over
-// the whole window. Only .arw/.raf files are accepted.
+// the whole window. Only supported RAW extensions are accepted.
 
-const ACCEPTED = /\.(arw|raf)$/i;
+const ACCEPTED = /\.(arw|raf|dng)$/i;
 
 /**
  * @param {{ onFile: (file: File) => void, onReject: (name: string) => void }} handlers
