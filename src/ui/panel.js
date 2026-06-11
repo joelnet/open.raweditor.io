@@ -3,7 +3,8 @@
 // colored left accent bars, uppercase monospace headers, green/red value
 // readouts.
 
-import { SECTIONS } from "../state.js";
+import { SECTIONS, GRADE_KEYS } from "../state.js";
+import { buildGrading } from "./grading.js";
 
 const EYE_OPEN =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
@@ -43,9 +44,10 @@ export function buildPanel(
   store,
   { onExport, onBypassChange, onAuto, onRevert },
 ) {
-  /** @type {Map<string, { input: HTMLInputElement, value: HTMLElement,
-   *                        decimals: number, scale: number }>} */
-  const rows = new Map();
+  /** A key can have several rows (e.g. luminance in 3-way and detail views).
+   * @type {{ key: string, input: HTMLInputElement, value: HTMLElement,
+   *          decimals: number, scale: number, signed: boolean }[]} */
+  const rows = [];
 
   // Sections whose eye is toggled off: sliders keep their values but are
   // treated as zero by effectiveSettings(), giving a before/after preview.
@@ -68,9 +70,48 @@ export function buildPanel(
     for (const input of entry.inputs) input.disabled = !panelEnabled || off;
   }
 
+  /**
+   * Build one slider row, registering it for store sync and bypass/disable.
+   * @param {import("../state.js").SliderDef} def
+   * @param {SectionEntry} entry
+   */
+  function makeRow(def, entry) {
+    const row = el("div", "slider-row");
+    const label = el("span", "slider-label", def.label);
+    const value = el("span", "slider-value", "0");
+    const input = /** @type {HTMLInputElement} */ (el("input"));
+    input.type = "range";
+    input.min = String(def.min);
+    input.max = String(def.max);
+    input.step = String(def.step);
+    input.value = "0";
+    input.disabled = true;
+    input.setAttribute("aria-label", def.label.toLowerCase());
+
+    input.addEventListener("input", () => {
+      store.set({ [def.key]: input.valueAsNumber * def.scale });
+    });
+    row.addEventListener("dblclick", () => {
+      store.set({ [def.key]: (def.reset ?? 0) * def.scale });
+    });
+
+    row.append(label, value, input);
+    entry.inputs.push(input);
+    rows.push({
+      key: def.key,
+      input,
+      value,
+      decimals: def.decimals,
+      scale: def.scale,
+      signed: def.signed ?? true,
+    });
+    return row;
+  }
+
   /** @type {HTMLElement[]} */
   const sections = [];
-  for (const { title, sliders, auto: hasAuto } of SECTIONS) {
+  for (const sectionDef of SECTIONS) {
+    const { title, sliders, auto: hasAuto } = sectionDef;
     const section = el("div", "section");
     const header = el("div", "section-header", title);
     const auto = /** @type {HTMLButtonElement} */ (
@@ -98,35 +139,10 @@ export function buildPanel(
       onBypassChange();
     });
 
-    for (const def of sliders) {
-      const row = el("div", "slider-row");
-      const label = el("span", "slider-label", def.label);
-      const value = el("span", "slider-value", "0");
-      const input = /** @type {HTMLInputElement} */ (el("input"));
-      input.type = "range";
-      input.min = String(def.min);
-      input.max = String(def.max);
-      input.step = String(def.step);
-      input.value = "0";
-      input.disabled = true;
-      input.setAttribute("aria-label", def.label.toLowerCase());
-
-      input.addEventListener("input", () => {
-        store.set({ [def.key]: input.valueAsNumber * def.scale });
-      });
-      row.addEventListener("dblclick", () => {
-        store.set({ [def.key]: 0 });
-      });
-
-      row.append(label, value, input);
-      section.append(row);
-      entry.inputs.push(input);
-      rows.set(def.key, {
-        input,
-        value,
-        decimals: def.decimals,
-        scale: def.scale,
-      });
+    if (sectionDef.grading) {
+      buildGrading(section, store, (def) => makeRow(def, entry));
+    } else {
+      for (const def of sliders) section.append(makeRow(def, entry));
     }
     sections.push(section);
   }
@@ -165,18 +181,18 @@ export function buildPanel(
   container.append(...sections, exportSection, revertSection);
 
   store.subscribe((state) => {
-    for (const [key, row] of rows) {
-      const scaled = state[/** @type {keyof typeof state} */ (key)];
+    for (const row of rows) {
+      const scaled = state[/** @type {keyof typeof state} */ (row.key)];
       const raw = scaled / row.scale;
       if (Math.abs(row.input.valueAsNumber - raw) > 1e-9) {
         row.input.value = String(raw);
       }
       const text =
-        (raw > 0 ? "+" : "") +
+        (row.signed && raw > 0 ? "+" : "") +
         raw.toFixed(row.decimals).replace(/^-0(\.0*)?$/, "0$1");
       row.value.textContent = text;
-      row.value.classList.toggle("pos", raw > 0);
-      row.value.classList.toggle("neg", raw < 0);
+      row.value.classList.toggle("pos", row.signed && raw > 0);
+      row.value.classList.toggle("neg", row.signed && raw < 0);
     }
   });
 
@@ -187,6 +203,7 @@ export function buildPanel(
       for (const entry of entries) {
         entry.eye.disabled = !enabled;
         entry.auto.disabled = !enabled || bypassed.has(entry.title);
+        entry.section.classList.toggle("disabled", !enabled);
         for (const input of entry.inputs) {
           input.disabled = !enabled || bypassed.has(entry.title);
         }
@@ -204,9 +221,10 @@ export function buildPanel(
     effectiveSettings(settings) {
       if (bypassed.size === 0) return settings;
       const out = { ...settings };
-      for (const { title, sliders } of SECTIONS) {
-        if (!bypassed.has(title)) continue;
-        for (const def of sliders) out[def.key] = 0;
+      for (const sec of SECTIONS) {
+        if (!bypassed.has(sec.title)) continue;
+        const keys = sec.grading ? GRADE_KEYS : sec.sliders.map((d) => d.key);
+        for (const key of keys) out[key] = 0;
       }
       return out;
     },

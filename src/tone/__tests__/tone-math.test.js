@@ -7,6 +7,8 @@ import {
   srgbEncode,
   srgbDecode,
   toneMapRows,
+  hueColor,
+  gradeWeights,
 } from "../tone-math.js";
 
 const EPS = 1e-9;
@@ -206,6 +208,142 @@ test("vibrance and saturation preserve Rec.709 luma", () => {
   }
 });
 
+test("hueColor hits the primaries and secondaries", () => {
+  assert.deepEqual(hueColor(0), [1, 0, 0]);
+  assert.deepEqual(hueColor(1 / 6), [1, 1, 0]);
+  assert.deepEqual(hueColor(2 / 6), [0, 1, 0]);
+  assert.deepEqual(hueColor(3 / 6), [0, 1, 1]);
+  assert.deepEqual(hueColor(4 / 6), [0, 0, 1]);
+  assert.deepEqual(hueColor(5 / 6), [1, 0, 1]);
+  assert.deepEqual(hueColor(1), [1, 0, 0]); // wraps
+});
+
+test("gradeWeights: shadows own black, highlights own white", () => {
+  const [s0, m0, h0] = gradeWeights(0, 0.5, 0);
+  assert.equal(s0, 1);
+  assert.equal(m0, 0);
+  assert.equal(h0, 0);
+  const [s1, m1, h1] = gradeWeights(1, 0.5, 0);
+  assert.equal(s1, 0);
+  assert.equal(m1, 0);
+  assert.equal(h1, 1);
+});
+
+test("gradeWeights: balance shifts the shadow/highlight crossover", () => {
+  const ye = 0.5;
+  const [, , hBase] = gradeWeights(ye, 0.5, 0);
+  const [sBase] = gradeWeights(ye, 0.5, 0);
+  const [sPos, , hPos] = gradeWeights(ye, 0.5, 1);
+  assert.ok(hPos > hBase); // +balance: highlights reach into darker tones
+  assert.ok(sPos < sBase || sBase === 0);
+  const [sNeg, , hNeg] = gradeWeights(ye, 0.5, -1);
+  assert.ok(sNeg > sBase); // -balance: shadows reach into brighter tones
+  assert.ok(hNeg < hPos);
+});
+
+test("gradeWeights: blending feathers the masks wider", () => {
+  // at low blending this luma is pure midtone; high blending bleeds the
+  // shadow and highlight masks into it
+  const ye = 0.52;
+  const [sTight, , hTight] = gradeWeights(ye, 0, 0);
+  assert.equal(sTight, 0);
+  assert.equal(hTight, 0);
+  const [sWide, , hWide] = gradeWeights(ye, 1, 0);
+  assert.ok(sWide > 0);
+  assert.ok(hWide > 0);
+});
+
+test("grading at zero sat/lum is identity for any blending/balance", () => {
+  for (const patch of [
+    { gradeBlending: 0, gradeBalance: 1 },
+    { gradeBlending: 1, gradeBalance: -1 },
+    { gradeShadowHue: 0.3, gradeMidHue: 0.6, gradeHighHue: 0.9 },
+  ]) {
+    for (const v of [0, 0.05, 0.18, 0.6, 1]) {
+      const [base] = applyTonePixel(v, v, v, ZERO_SETTINGS);
+      const [out] = applyTonePixel(v, v, v, settings(patch));
+      assert.ok(Math.abs(out - base) < EPS, JSON.stringify(patch));
+    }
+  }
+});
+
+test("shadow tint colors dark grays, leaves bright pixels alone", () => {
+  const s = settings({ gradeShadowHue: 0, gradeShadowSat: 1 }); // red
+  const dark = applyTonePixel(0.03, 0.03, 0.03, s);
+  assert.ok(dark[0] > dark[1] + 1e-3); // pushed toward red
+  assert.ok(Math.abs(dark[1] - dark[2]) < EPS);
+  const bright = applyTonePixel(0.9, 0.9, 0.9, s);
+  const [brightBase] = applyTonePixel(0.9, 0.9, 0.9, ZERO_SETTINGS);
+  assert.ok(Math.abs(bright[0] - brightBase) < EPS);
+});
+
+test("highlight tint colors bright grays, leaves dark pixels alone", () => {
+  const s = settings({ gradeHighHue: 4 / 6, gradeHighSat: 1 }); // blue
+  const bright = applyTonePixel(0.85, 0.85, 0.85, s);
+  assert.ok(bright[2] > bright[0] + 1e-3);
+  const dark = applyTonePixel(0.03, 0.03, 0.03, s);
+  const [darkBase] = applyTonePixel(0.03, 0.03, 0.03, ZERO_SETTINGS);
+  assert.ok(Math.abs(dark[0] - darkBase) < EPS);
+});
+
+test("midtone tint colors middle gray, not the extremes", () => {
+  const s = settings({ gradeMidHue: 2 / 6, gradeMidSat: 1 }); // green
+  const mid = applyTonePixel(0.18, 0.18, 0.18, s);
+  assert.ok(mid[1] > mid[0] + 1e-3);
+  for (const v of [0, 1]) {
+    const out = applyTonePixel(v, v, v, s);
+    const base = applyTonePixel(v, v, v, ZERO_SETTINGS);
+    for (let c = 0; c < 3; c++) {
+      assert.ok(Math.abs(out[c] - base[c]) < 1e-3, `v=${v}`);
+    }
+  }
+});
+
+test("grading tints pin pure black and white", () => {
+  const s = settings({
+    gradeShadowHue: 0,
+    gradeShadowSat: 1,
+    gradeMidHue: 0.3,
+    gradeMidSat: 1,
+    gradeHighHue: 0.6,
+    gradeHighSat: 1,
+    gradeBlending: 1,
+  });
+  assert.deepEqual(applyTonePixel(0, 0, 0, s), [0, 0, 0]);
+  for (const ch of applyTonePixel(1, 1, 1, s)) {
+    assert.ok(Math.abs(ch - 1) < 1e-12);
+  }
+});
+
+test("zone luminance lifts its zone, leaves the opposite end alone", () => {
+  const sUp = settings({ gradeShadowLum: 1 });
+  const [darkUp] = applyTonePixel(0.03, 0.03, 0.03, sUp);
+  const [darkBase] = applyTonePixel(0.03, 0.03, 0.03, ZERO_SETTINGS);
+  assert.ok(darkUp > darkBase);
+  const [brightUp] = applyTonePixel(0.9, 0.9, 0.9, sUp);
+  const [brightBase] = applyTonePixel(0.9, 0.9, 0.9, ZERO_SETTINGS);
+  assert.ok(Math.abs(brightUp - brightBase) < EPS);
+
+  const sDown = settings({ gradeHighLum: -1 });
+  const [brightDown] = applyTonePixel(0.9, 0.9, 0.9, sDown);
+  assert.ok(brightDown < brightBase);
+  const [darkDown] = applyTonePixel(0.03, 0.03, 0.03, sDown);
+  assert.ok(Math.abs(darkDown - darkBase) < EPS);
+});
+
+test("balance pushes a tint across the midtones", () => {
+  // midgray under a highlight tint: only reachable with +balance
+  const tint = { gradeHighHue: 0, gradeHighSat: 1 };
+  const base = applyTonePixel(0.13, 0.13, 0.13, settings(tint));
+  const pushed = applyTonePixel(
+    0.13,
+    0.13,
+    0.13,
+    settings({ ...tint, gradeBalance: 1 }),
+  );
+  assert.ok(chroma(pushed) > chroma(base));
+});
+
 test("output stays in [0,1] under extreme settings", () => {
   const extremes = [
     settings({
@@ -228,6 +366,19 @@ test("output stays in [0,1] under extreme settings", () => {
       vibrance: -1,
     }),
     settings({ exposure: 5, whites: 1, highlights: 1, tint: -1, vibrance: 1 }),
+    settings({
+      gradeShadowHue: 0,
+      gradeShadowSat: 1,
+      gradeShadowLum: 1,
+      gradeMidHue: 0.5,
+      gradeMidSat: 1,
+      gradeMidLum: -1,
+      gradeHighHue: 0.8,
+      gradeHighSat: 1,
+      gradeHighLum: 1,
+      gradeBlending: 1,
+      gradeBalance: -1,
+    }),
   ];
   for (const s of extremes) {
     for (const v of [0, 0.18, 1, 4]) {

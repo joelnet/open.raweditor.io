@@ -1,14 +1,20 @@
 // Pure-JS tone pipeline. The preview shader in gl/shaders.js implements the
 // exact same steps on the GPU; keep the two line-for-line in sync.
 
-import { TONE, INPUT_TRANSFER, LUMA } from "./constants.js";
+import { TONE, GRADE, INPUT_TRANSFER, LUMA } from "./constants.js";
 
 /**
- * Tone settings, all pre-scaled: exposure in EV (±5), the rest in [-1, +1].
+ * Tone settings, all pre-scaled: exposure in EV (±5), grade hues in turns
+ * [0, 1), grade sats and blending in [0, 1], the rest in [-1, +1].
  * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
  *             highlights: number, shadows: number, whites: number,
- *             blacks: number, vibrance: number,
- *             saturation: number }} ToneSettings
+ *             blacks: number, vibrance: number, saturation: number,
+ *             gradeShadowHue: number, gradeShadowSat: number,
+ *             gradeShadowLum: number, gradeMidHue: number,
+ *             gradeMidSat: number, gradeMidLum: number,
+ *             gradeHighHue: number, gradeHighSat: number,
+ *             gradeHighLum: number, gradeBlending: number,
+ *             gradeBalance: number }} ToneSettings
  */
 
 export const ZERO_SETTINGS = Object.freeze({
@@ -22,6 +28,19 @@ export const ZERO_SETTINGS = Object.freeze({
   blacks: 0,
   vibrance: 0,
   saturation: 0,
+  gradeShadowHue: 0,
+  gradeShadowSat: 0,
+  gradeShadowLum: 0,
+  gradeMidHue: 0,
+  gradeMidSat: 0,
+  gradeMidLum: 0,
+  gradeHighHue: 0,
+  gradeHighSat: 0,
+  gradeHighLum: 0,
+  // Lightroom's blending default: tints are identity at sat 0, so 0.5 here
+  // keeps ZERO_SETTINGS an identity transform.
+  gradeBlending: 0.5,
+  gradeBalance: 0,
 });
 
 /**
@@ -59,6 +78,50 @@ export function decodeInput(v) {
   if (INPUT_TRANSFER === "linear") return v;
   // Inverse BT.709 OETF (LibRaw default gamma 2.222 with 4.5 toe slope).
   return v < 0.081 ? v / 4.5 : Math.pow((v + 0.099) / 1.099, 1 / 0.45);
+}
+
+/**
+ * Pure wheel hue → RGB (the hexagonal hue ramp; hsl(h, 100%, 50%)).
+ * Shared by the grading pipeline and the color-wheel UI so the puck color
+ * always matches the applied tint.
+ * @param {number} h hue in turns [0, 1)
+ * @returns {[number, number, number]}
+ */
+export function hueColor(h) {
+  const t = h - Math.floor(h);
+  const r = Math.min(Math.max(Math.abs(6 * t - 3) - 1, 0), 1);
+  const g = Math.min(Math.max(2 - Math.abs(6 * t - 2), 0), 1);
+  const b = Math.min(Math.max(2 - Math.abs(6 * t - 4), 0), 1);
+  return [r, g, b];
+}
+
+/**
+ * Pegtop soft-light blend: smooth, identity at blend 0.5, and pins black
+ * and white so tints never wash out the endpoints.
+ * @param {number} a base (display-referred [0,1])
+ * @param {number} b blend
+ */
+function softLight(a, b) {
+  return (1 - 2 * b) * a * a + 2 * b * a;
+}
+
+/**
+ * Color grading zone weights at one sqrt-luma value. Blending feathers the
+ * mask edges; balance > 0 extends the highlights zone into darker tones
+ * (and shrinks the shadows zone), < 0 the reverse.
+ * @param {number} ye sqrt-luma [0, 1]
+ * @param {number} blending [0, 1]
+ * @param {number} balance [-1, 1]
+ * @returns {[number, number, number]} shadow, midtone, highlight weights
+ */
+export function gradeWeights(ye, blending, balance) {
+  const wid = GRADE.WIDTH[0] + (GRADE.WIDTH[1] - GRADE.WIDTH[0]) * blending;
+  const shift = GRADE.BALANCE_SHIFT * balance;
+  const sC = GRADE.SHADOW_CENTER - shift;
+  const hC = GRADE.HIGHLIGHT_CENTER - shift;
+  const wS = 1 - smoothstep(sC - wid, sC + wid, ye);
+  const wH = smoothstep(hC - wid, hC + wid, ye);
+  return [wS, (1 - wS) * (1 - wH), wH];
 }
 
 /**
@@ -138,7 +201,51 @@ export function applyTonePixel(r, g, b, s) {
     b = y + (b - y) * factor;
   }
 
-  // 7. clamp + display encode
+  // 7. color grading: per-zone luminance gain (linear light), then per-zone
+  // soft-light tint on the display-referred values. Masks are computed once,
+  // before the luminance gain moves the pixel.
+  const grading =
+    s.gradeShadowSat !== 0 ||
+    s.gradeMidSat !== 0 ||
+    s.gradeHighSat !== 0 ||
+    s.gradeShadowLum !== 0 ||
+    s.gradeMidLum !== 0 ||
+    s.gradeHighLum !== 0;
+  if (grading) {
+    const y = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
+    const ye = Math.sqrt(Math.min(Math.max(y, 0), 1));
+    const [wS, wM, wH] = gradeWeights(ye, s.gradeBlending, s.gradeBalance);
+    const gain = Math.pow(
+      2,
+      GRADE.LUM_EV *
+        (s.gradeShadowLum * wS + s.gradeMidLum * wM + s.gradeHighLum * wH),
+    );
+    r = Math.min(Math.max(r * gain, 0), 1);
+    g = Math.min(Math.max(g * gain, 0), 1);
+    b = Math.min(Math.max(b * gain, 0), 1);
+    let er = srgbEncode(r);
+    let eg = srgbEncode(g);
+    let eb = srgbEncode(b);
+    const zones = /** @type {const} */ ([
+      [s.gradeShadowHue, s.gradeShadowSat * wS],
+      [s.gradeMidHue, s.gradeMidSat * wM],
+      [s.gradeHighHue, s.gradeHighSat * wH],
+    ]);
+    for (const [hue, amount] of zones) {
+      if (amount === 0) continue;
+      const [tr, tg, tb] = hueColor(hue);
+      er = softLight(er, 0.5 + (tr - 0.5) * amount);
+      eg = softLight(eg, 0.5 + (tg - 0.5) * amount);
+      eb = softLight(eb, 0.5 + (tb - 0.5) * amount);
+    }
+    return [
+      Math.min(Math.max(er, 0), 1),
+      Math.min(Math.max(eg, 0), 1),
+      Math.min(Math.max(eb, 0), 1),
+    ];
+  }
+
+  // 8. clamp + display encode
   return [
     srgbEncode(Math.min(Math.max(r, 0), 1)),
     srgbEncode(Math.min(Math.max(g, 0), 1)),

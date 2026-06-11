@@ -1,6 +1,6 @@
 // WebGL2 preview renderer: one RGBA16UI texture, one fullscreen-triangle
-// program, eight float uniforms plus a view rect (zoom/crop window).
-// A full re-render is a single draw call.
+// program, one float uniform per tone setting plus a view rect (zoom/crop
+// window). A full re-render is a single draw call.
 
 import { VERTEX_SHADER, FRAGMENT_SHADER } from "./shaders.js";
 
@@ -23,6 +23,17 @@ const UNIFORMS = /** @type {const} */ ([
   "blacks",
   "vibrance",
   "saturation",
+  "gradeShadowHue",
+  "gradeShadowSat",
+  "gradeShadowLum",
+  "gradeMidHue",
+  "gradeMidSat",
+  "gradeMidLum",
+  "gradeHighHue",
+  "gradeHighSat",
+  "gradeHighLum",
+  "gradeBlending",
+  "gradeBalance",
 ]);
 
 /**

@@ -22,6 +22,27 @@ export const TONE = {
 };
 
 /**
+ * Color grading (Lightroom-style split toning): per-zone hue/sat tints and
+ * luminance gains, weighted by smoothstep masks on sqrt-luma. Mask shape
+ * follows darktable's color balance rgb (masked zones) and splittoning
+ * (balance shifts the shadow/highlight crossover); the tint itself is a
+ * soft-light blend, the standard open-source split-toning operator
+ * (e.g. Unity URP color grading).
+ */
+export const GRADE = {
+  /** Center (on sqrt-luma) of the shadows mask falloff. */
+  SHADOW_CENTER: 0.35,
+  /** Center (on sqrt-luma) of the highlights mask rise. */
+  HIGHLIGHT_CENTER: 0.7,
+  /** Mask feather half-width at blending 0 → 1. */
+  WIDTH: [0.05, 0.45],
+  /** Balance slider ±1 shifts both mask centers by ∓BALANCE_SHIFT. */
+  BALANCE_SHIFT: 0.3,
+  /** Max EV of per-zone luminance gain at slider ±1. */
+  LUM_EV: 1.5,
+};
+
+/**
  * Transfer curve of the decoded 16-bit data coming out of LibRaw.
  * "linear" assumes gamm:[1,1] is honored; flip to "bt709" if the decode
  * probe shows LibRaw's default BT.709-ish gamma is applied anyway.
