@@ -31,10 +31,18 @@ export default defineConfig({
     },
     ...(useHttps ? [basicSsl()] : []),
     VitePWA({
-      registerType: "autoUpdate",
+      // "prompt": a new service worker installs but waits until the user
+      // accepts the in-app update notice (see src/pwa.js), instead of
+      // silently swapping assets out from under a session.
+      registerType: "prompt",
+      injectRegister: false,
       manifest: false,
       workbox: {
         globPatterns: ["**/*.{html,js,css,wasm}"],
+        // No skipWaiting — the page sends SKIP_WAITING when the user opts
+        // in. clientsClaim lets the new worker take over the open page so
+        // the post-update reload fires.
+        clientsClaim: true,
         // libraw wasm is ~1.4MB; Workbox silently skips files over its 2MB
         // default, which would break offline without warning if it grows.
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,

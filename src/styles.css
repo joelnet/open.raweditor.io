@@ -945,6 +945,38 @@ button:disabled {
   color: var(--accent-red);
 }
 
+/* ---- update banner ---- */
+
+#update-banner {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(42px + env(safe-area-inset-bottom, 0px));
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 420px);
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.45);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+#update-banner .update {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+  padding: 4px 12px;
+}
+
+#update-banner .dismiss {
+  color: var(--muted);
+  padding: 4px 8px;
+}
+
 /* ---- masks: list, selected-mask tools, viewport geometry overlay ---- */
 
 .section.section-masks {

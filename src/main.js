@@ -15,6 +15,9 @@ import { initDivider } from "./ui/divider.js";
 import { initElevator } from "./ui/elevator.js";
 import { createStatus } from "./ui/status.js";
 import { createExporter, downloadBlob } from "./export/export.js";
+import { initPwaUpdates } from "./pwa.js";
+
+initPwaUpdates();
 
 const canvas = /** @type {HTMLCanvasElement} */ (
   document.getElementById("preview")
