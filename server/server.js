@@ -15,6 +15,22 @@ export function createServer() {
     c.header("Cross-Origin-Embedder-Policy", "require-corp");
   });
 
+  // Hashed filenames under /assets can cache forever. Everything at a
+  // stable URL (index.html, sw.js) must revalidate: with no header,
+  // Cloudflare edge-caches .js for hours, and a stale sw.js blocks PWA
+  // updates entirely. (Not serveStatic's onFound — @hono/node-server
+  // builds the Response before invoking it, so headers set there are
+  // dropped.)
+  app.use(async (c, next) => {
+    await next();
+    c.header(
+      "Cache-Control",
+      c.req.path.startsWith("/assets/")
+        ? "public, max-age=31536000, immutable"
+        : "no-cache",
+    );
+  });
+
   // The built frontend; compress matters for the ~1.4MB libraw wasm asset.
   app.use(compress());
   app.use("/*", serveStatic({ root: "./dist" }));
