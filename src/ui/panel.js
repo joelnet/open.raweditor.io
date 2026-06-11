@@ -6,13 +6,13 @@
 import { SECTIONS, GRADE_KEYS } from "../state.js";
 import { buildGrading } from "./grading.js";
 
-const EYE_OPEN =
+export const EYE_OPEN =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
   'stroke="currentColor" stroke-width="1.4" aria-hidden="true">' +
   '<path d="M1.5 8s2.5-4.2 6.5-4.2S14.5 8 14.5 8 12 12.2 8 12.2 1.5 8 1.5 8Z"/>' +
   '<circle cx="8" cy="8" r="2.1"/></svg>';
 
-const EYE_CLOSED =
+export const EYE_CLOSED =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
   'stroke="currentColor" stroke-width="1.4" aria-hidden="true">' +
   '<path d="M1.5 8s2.5-4.2 6.5-4.2S14.5 8 14.5 8 12 12.2 8 12.2 1.5 8 1.5 8Z"/>' +
@@ -182,7 +182,8 @@ export function buildPanel(
 
   store.subscribe((state) => {
     for (const row of rows) {
-      const scaled = state[/** @type {keyof typeof state} */ (row.key)];
+      const scaled =
+        state[/** @type {import("../state.js").SliderKey} */ (row.key)];
       const raw = scaled / row.scale;
       if (Math.abs(row.input.valueAsNumber - raw) > 1e-9) {
         row.input.value = String(raw);

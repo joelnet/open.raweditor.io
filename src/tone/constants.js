@@ -43,6 +43,24 @@ export const GRADE = {
 };
 
 /**
+ * Local adjustment masks (Lightroom-style linear/radial gradients). Mask
+ * shapes follow darktable: the linear gradient is a smoothstep ramp across
+ * a rotated line (masks/gradient.c's sigmoidal falloff), the radial is a
+ * rotated ellipse with a quadratic falloff between an inner fully-selected
+ * ellipse and the drawn outer one (masks/ellipse.c).
+ */
+export const MASK = {
+  /** Uniform-array bound shared by the shader and the renderer. */
+  MAX: 8,
+  /** Default linear falloff half-width, as a fraction of the diagonal. */
+  LINEAR_RANGE: 0.1,
+  /** Default radial feather (Lightroom's default of 50). */
+  RADIAL_FEATHER: 0.5,
+  /** Default radial semi-axes, as fractions of min(width, height). */
+  RADIAL_RADIUS: [0.35, 0.25],
+};
+
+/**
  * Transfer curve of the decoded 16-bit data coming out of LibRaw.
  * "linear" assumes gamm:[1,1] is honored; flip to "bt709" if the decode
  * probe shows LibRaw's default BT.709-ish gamma is applied anyway.

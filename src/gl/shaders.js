@@ -1,10 +1,11 @@
 // GLSL for the preview path. The fragment shader mirrors tone-math.js
 // step-for-step (white balance → exposure → whites/blacks → contrast →
-// highlights/shadows → vibrance/saturation → color grading → sRGB encode);
-// constants are interpolated from tone/constants.js so the GPU preview and
-// the CPU export can never drift apart.
+// highlights/shadows → local masks → vibrance/saturation → color grading →
+// sRGB encode); constants are interpolated from tone/constants.js so the
+// GPU preview and the CPU export can never drift apart. The red mask
+// overlay is the one preview-only extra (it never affects an export).
 
-import { TONE, GRADE, INPUT_TRANSFER, LUMA } from "../tone/constants.js";
+import { TONE, GRADE, MASK, INPUT_TRANSFER, LUMA } from "../tone/constants.js";
 
 /** @param {number} n */
 const f = (n) => n.toFixed(6);
@@ -65,6 +66,15 @@ uniform float u_gradeHighLum;   // [-1, 1]
 uniform float u_gradeBlending;  // [0, 1]
 uniform float u_gradeBalance;   // [-1, 1]
 
+// Local masks — geometry and adjustments mirror tone/mask-math.js.
+uniform int u_maskCount;
+uniform vec4 u_maskGeo[${MASK.MAX}];   // x, y (UV), angle (rad), type (0 linear, 1 radial)
+uniform vec4 u_maskParam[${MASK.MAX}]; // linear: range,-,-,invert | radial: rx, ry, feather, invert
+uniform vec4 u_maskAdjA[${MASK.MAX}];  // temp, tint, exposure, contrast
+uniform vec4 u_maskAdjB[${MASK.MAX}];  // highlights, shadows, whites, blacks
+uniform vec4 u_maskAdjC[${MASK.MAX}];  // vibrance, saturation, -, -
+uniform int u_maskOverlay;             // mask index to tint red, -1 = off
+
 in vec2 v_uv;
 out vec4 outColor;
 
@@ -90,6 +100,95 @@ vec3 hueColor(float h) {
 // pegtop soft light: identity at blend 0.5, pins black and white
 vec3 softLight(vec3 a, vec3 b) {
   return (1.0 - 2.0 * b) * a * a + 2.0 * b * a;
+}
+
+// Mask weight at one pixel — mirrors maskWeight() in mask-math.js.
+// Computed in pixel space so radial masks stay true ellipses on
+// non-square images.
+float maskWeight(vec2 uv, vec2 size, vec4 geo, vec4 param) {
+  vec2 d = uv * size - geo.xy * size;
+  float ca = cos(geo.z), sa = sin(geo.z);
+  float m;
+  if (geo.w < 0.5) {
+    // linear: signed distance along the gradient direction,
+    // diagonal-normalized, smoothstep ramp (≈ darktable's erf sigmoid)
+    float t = (ca * d.x + sa * d.y) / length(size);
+    float range = max(param.x, 1e-4);
+    m = smoothstep(-range, range, t);
+  } else {
+    // rotated ellipse: quadratic falloff in squared-radius space between
+    // the inner (fully selected) and outer ellipse, per darktable
+    float mind = min(size.x, size.y);
+    float a = max(param.x, 1e-3) * mind;
+    float b = max(param.y, 1e-3) * mind;
+    float ia = a * (1.0 - param.z);
+    float ib = b * (1.0 - param.z);
+    float l2 = dot(d, d);
+    if (l2 < 1e-6) {
+      m = 1.0;
+    } else {
+      vec2 u = d * inversesqrt(l2);
+      float cv = u.x * ca + u.y * sa;
+      float sv = -u.x * sa + u.y * ca;
+      float t2 = (a * a * b * b) / (a * a * sv * sv + b * b * cv * cv);
+      float r2 = (ia * ia * ib * ib)
+        / max(ia * ia * sv * sv + ib * ib * cv * cv, 1e-9);
+      float f = clamp((t2 - l2) / max(t2 - r2, 1e-9), 0.0, 1.0);
+      m = f * f;
+    }
+  }
+  return mix(m, 1.0 - m, param.w);
+}
+
+// One mask's local adjustments, every strength scaled by the mask weight
+// m — mirrors applyMaskAdjust() in tone-math.js (same ops and order as
+// global steps 1–6; vibrance/saturation runs unclamped here, the global
+// clamp happens later at step 6).
+vec3 applyMaskAdjust(vec3 rgb, float m, vec4 adjA, vec4 adjB, vec4 adjC) {
+  // 1. white balance
+  rgb *= exp2(vec3(
+    ${f(TONE.WB_TEMP_EV)} * adjA.x,
+    -${f(TONE.WB_TINT_EV)} * adjA.y,
+    -${f(TONE.WB_TEMP_EV)} * adjA.x
+  ) * m);
+
+  // 2. exposure
+  rgb *= exp2(adjA.z * m);
+
+  // 3. whites / blacks
+  float white = 1.0 - ${f(TONE.WHITES_RANGE)} * adjB.z * m;
+  float black = -${f(TONE.BLACKS_RANGE)} * adjB.w * m;
+  rgb = (rgb - black) / max(white - black, 1e-4);
+
+  // 4. contrast
+  rgb = max(rgb, vec3(0.0));
+  float cc = adjA.w * m;
+  if (cc != 0.0) {
+    float c = cc >= 0.0 ? 1.0 + cc : 1.0 / (1.0 - cc);
+    rgb = ${f(TONE.PIVOT)} * pow(rgb / ${f(TONE.PIVOT)}, vec3(c));
+  }
+
+  // 5. highlights / shadows
+  if (adjB.x != 0.0 || adjB.y != 0.0) {
+    float y = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
+    float ye = sqrt(clamp(y, 0.0, 1.0));
+    float mS = 1.0 - smoothstep(${f(TONE.SHADOW_MASK[0])}, ${f(TONE.SHADOW_MASK[1])}, ye);
+    float mH = smoothstep(${f(TONE.HIGHLIGHT_MASK[0])}, ${f(TONE.HIGHLIGHT_MASK[1])}, ye);
+    rgb *= exp2(${f(TONE.SH_STRENGTH_EV)} * (adjB.y * mS + adjB.x * mH) * m);
+  }
+
+  // 6. vibrance / saturation
+  if (adjC.x != 0.0 || adjC.y != 0.0) {
+    float y = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
+    float mx = max(rgb.r, max(rgb.g, rgb.b));
+    float mn = min(rgb.r, min(rgb.g, rgb.b));
+    float sat = mx > 0.0 ? (mx - mn) / mx : 0.0;
+    float w = adjC.x >= 0.0 ? 1.0 - sat : sat;
+    float factor = max((1.0 + adjC.y * m) * (1.0 + adjC.x * m * w), 0.0);
+    rgb = vec3(y) + (rgb - vec3(y)) * factor;
+  }
+
+  return rgb;
 }
 
 void main() {
@@ -126,6 +225,16 @@ void main() {
   float mH = smoothstep(${f(TONE.HIGHLIGHT_MASK[0])}, ${f(TONE.HIGHLIGHT_MASK[1])}, ye);
   rgb *= exp2(${f(TONE.SH_STRENGTH_EV)} * (u_shadows * mS + u_highlights * mH));
 
+  // 5.5 local masks: each mask's own adjustment set, applied through its
+  // per-pixel weight (Lightroom layering: locals stack on the globals)
+  for (int i = 0; i < ${MASK.MAX}; i++) {
+    if (i >= u_maskCount) break;
+    float mw = maskWeight(v_uv, vec2(ts), u_maskGeo[i], u_maskParam[i]);
+    if (mw > 0.0) {
+      rgb = applyMaskAdjust(rgb, mw, u_maskAdjA[i], u_maskAdjB[i], u_maskAdjC[i]);
+    }
+  }
+
   // 6. vibrance / saturation: scale chroma around Rec.709 luma. Vibrance is
   // weighted by 1 - HSV saturation so already-vivid pixels are protected
   // (darktable velvia-style); negative vibrance tames the most saturated
@@ -147,6 +256,7 @@ void main() {
   bool grading = u_gradeShadowSat != 0.0 || u_gradeMidSat != 0.0
     || u_gradeHighSat != 0.0 || u_gradeShadowLum != 0.0
     || u_gradeMidLum != 0.0 || u_gradeHighLum != 0.0;
+  vec3 display;
   if (grading) {
     y = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
     ye = sqrt(clamp(y, 0.0, 1.0));
@@ -163,11 +273,20 @@ void main() {
     e = softLight(e, mix(vec3(0.5), hueColor(u_gradeShadowHue), u_gradeShadowSat * wS));
     e = softLight(e, mix(vec3(0.5), hueColor(u_gradeMidHue), u_gradeMidSat * wM));
     e = softLight(e, mix(vec3(0.5), hueColor(u_gradeHighHue), u_gradeHighSat * wH));
-    outColor = vec4(clamp(e, 0.0, 1.0), 1.0);
-    return;
+    display = clamp(e, 0.0, 1.0);
+  } else {
+    // 8. clamp + display encode
+    display = srgbEncode(clamp(rgb, 0.0, 1.0));
   }
 
-  // 8. clamp + display encode
-  outColor = vec4(srgbEncode(clamp(rgb, 0.0, 1.0)), 1.0);
+  // mask visualization: tint the selected mask's coverage red
+  // (preview-only — the CPU export has no counterpart on purpose)
+  if (u_maskOverlay >= 0 && u_maskOverlay < u_maskCount) {
+    float ov = maskWeight(v_uv, vec2(ts),
+      u_maskGeo[u_maskOverlay], u_maskParam[u_maskOverlay]);
+    display = mix(display, vec3(0.86, 0.15, 0.15), ov * 0.55);
+  }
+
+  outColor = vec4(display, 1.0);
 }
 `;

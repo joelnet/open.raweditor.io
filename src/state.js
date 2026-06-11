@@ -7,7 +7,7 @@ import { ZERO_SETTINGS } from "./tone/tone-math.js";
 
 /**
  * @typedef {import("./tone/tone-math.js").ToneSettings} ToneSettings
- * @typedef {keyof ToneSettings} SliderKey
+ * @typedef {Exclude<keyof ToneSettings, "masks">} SliderKey scalar keys only
  */
 
 /**

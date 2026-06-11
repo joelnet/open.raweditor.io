@@ -909,3 +909,151 @@ button:disabled {
 #statusbar .error {
   color: var(--accent-red);
 }
+
+/* ---- masks: list, selected-mask tools, viewport geometry overlay ---- */
+
+.section.section-masks {
+  border-left-color: var(--accent-blue);
+}
+
+.mask-add-row {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px 4px;
+}
+
+.mask-add-row button {
+  flex: 1;
+  min-width: 0;
+}
+
+.mask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px;
+}
+
+.mask-list:empty {
+  display: none;
+}
+
+.mask-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+}
+
+.mask-item.active {
+  border-color: var(--accent-blue);
+}
+
+.mask-item .mask-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.mask-item.active .mask-name {
+  color: var(--text);
+}
+
+.mask-item-eye {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+}
+
+.mask-item-eye:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.mask-tools {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px 2px;
+}
+
+.mask-tools button {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.mask-tools button.active:not(:disabled) {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.section.bypassed .mask-tools,
+.section.bypassed .mask-list {
+  opacity: 0.45;
+}
+
+#mask-overlay {
+  position: absolute;
+  z-index: 2;
+  overflow: hidden; /* boundary lines extend far past the frame */
+  pointer-events: none; /* zoom/pan stays live; only handles grab input */
+  touch-action: none;
+}
+
+#mask-overlay[hidden] {
+  display: none;
+}
+
+#mask-overlay svg {
+  display: block;
+}
+
+.mask-shape {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1.5;
+}
+
+.mask-shape.inner {
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.7;
+}
+
+.mask-arm {
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1;
+}
+
+.mask-handle {
+  fill: var(--text);
+  stroke: var(--bg-deep);
+  stroke-width: 1.5;
+  pointer-events: all;
+  cursor: grab;
+}
+
+.mask-pin {
+  fill: var(--accent-blue);
+  cursor: move;
+}
+
+.mask-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: ew-resize;
+}

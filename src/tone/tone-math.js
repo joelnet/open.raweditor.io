@@ -2,10 +2,13 @@
 // exact same steps on the GPU; keep the two line-for-line in sync.
 
 import { TONE, GRADE, INPUT_TRANSFER, LUMA } from "./constants.js";
+import { prepareMask, maskWeight } from "./mask-math.js";
 
 /**
  * Tone settings, all pre-scaled: exposure in EV (±5), grade hues in turns
  * [0, 1), grade sats and blending in [0, 1], the rest in [-1, +1].
+ * `masks` are local adjustments (linear/radial gradients); treat the array
+ * as immutable — always replace it, never mutate in place.
  * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
  *             highlights: number, shadows: number, whites: number,
  *             blacks: number, vibrance: number, saturation: number,
@@ -14,7 +17,9 @@ import { TONE, GRADE, INPUT_TRANSFER, LUMA } from "./constants.js";
  *             gradeMidSat: number, gradeMidLum: number,
  *             gradeHighHue: number, gradeHighSat: number,
  *             gradeHighLum: number, gradeBlending: number,
- *             gradeBalance: number }} ToneSettings
+ *             gradeBalance: number,
+ *             masks: readonly import("./mask-math.js").Mask[]
+ *           }} ToneSettings
  */
 
 export const ZERO_SETTINGS = Object.freeze({
@@ -41,6 +46,7 @@ export const ZERO_SETTINGS = Object.freeze({
   // keeps ZERO_SETTINGS an identity transform.
   gradeBlending: 0.5,
   gradeBalance: 0,
+  masks: Object.freeze([]),
 });
 
 /**
@@ -125,16 +131,106 @@ export function gradeWeights(ye, blending, balance) {
 }
 
 /**
+ * Apply one mask's local adjustments to a linear-light pixel, with every
+ * strength parameter scaled by the mask weight `m` (the darktable
+ * graduatednd model: exposure stays additive in EV inside the mask, and
+ * the result is continuous in both the weight and the sliders). The ops
+ * and their order mirror global steps 1–6; the only difference is that
+ * vibrance/saturation runs unclamped here (mid-pipeline values may exceed
+ * 1 — the global clamp happens later, at step 6).
+ * @param {number} r
+ * @param {number} g
+ * @param {number} b
+ * @param {import("./mask-math.js").MaskAdjustments} a
+ * @param {number} m mask weight [0, 1]
+ * @returns {[number, number, number]}
+ */
+function applyMaskAdjust(r, g, b, a, m) {
+  // 1. white balance
+  if (a.temp !== 0 || a.tint !== 0) {
+    r *= Math.pow(2, TONE.WB_TEMP_EV * a.temp * m);
+    b *= Math.pow(2, -TONE.WB_TEMP_EV * a.temp * m);
+    g *= Math.pow(2, -TONE.WB_TINT_EV * a.tint * m);
+  }
+
+  // 2. exposure
+  if (a.exposure !== 0) {
+    const gain = Math.pow(2, a.exposure * m);
+    r *= gain;
+    g *= gain;
+    b *= gain;
+  }
+
+  // 3. whites / blacks
+  if (a.whites !== 0 || a.blacks !== 0) {
+    const white = 1 - TONE.WHITES_RANGE * a.whites * m;
+    const black = -TONE.BLACKS_RANGE * a.blacks * m;
+    const range = Math.max(white - black, 1e-4);
+    r = (r - black) / range;
+    g = (g - black) / range;
+    b = (b - black) / range;
+  }
+
+  // 4. contrast
+  r = Math.max(r, 0);
+  g = Math.max(g, 0);
+  b = Math.max(b, 0);
+  const cc = a.contrast * m;
+  if (cc !== 0) {
+    const c = cc >= 0 ? 1 + cc : 1 / (1 - cc);
+    r = TONE.PIVOT * Math.pow(r / TONE.PIVOT, c);
+    g = TONE.PIVOT * Math.pow(g / TONE.PIVOT, c);
+    b = TONE.PIVOT * Math.pow(b / TONE.PIVOT, c);
+  }
+
+  // 5. highlights / shadows
+  if (a.shadows !== 0 || a.highlights !== 0) {
+    const y = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
+    const ye = Math.sqrt(Math.min(Math.max(y, 0), 1));
+    const mS = 1 - smoothstep(TONE.SHADOW_MASK[0], TONE.SHADOW_MASK[1], ye);
+    const mH = smoothstep(TONE.HIGHLIGHT_MASK[0], TONE.HIGHLIGHT_MASK[1], ye);
+    const gain = Math.pow(
+      2,
+      TONE.SH_STRENGTH_EV * (a.shadows * mS + a.highlights * mH) * m,
+    );
+    r *= gain;
+    g *= gain;
+    b *= gain;
+  }
+
+  // 6. vibrance / saturation
+  if (a.vibrance !== 0 || a.saturation !== 0) {
+    const y = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const sat = mx > 0 ? (mx - mn) / mx : 0;
+    const w = a.vibrance >= 0 ? 1 - sat : sat;
+    const factor = Math.max(
+      (1 + a.saturation * m) * (1 + a.vibrance * m * w),
+      0,
+    );
+    r = y + (r - y) * factor;
+    g = y + (g - y) * factor;
+    b = y + (b - y) * factor;
+  }
+
+  return [r, g, b];
+}
+
+/**
  * Apply the tone pipeline to one linear-light pixel.
  * Input components may exceed [0,1] (pre-clip highlights); output is
  * display-referred sRGB, clamped to [0,1].
+ * `maskWeights` holds the local-mask weight at this pixel for each entry
+ * of `s.masks` (computed by the caller, which knows the pixel position).
  * @param {number} r
  * @param {number} g
  * @param {number} b
  * @param {ToneSettings} s
+ * @param {ArrayLike<number>} [maskWeights]
  * @returns {[number, number, number]}
  */
-export function applyTonePixel(r, g, b, s) {
+export function applyTonePixel(r, g, b, s, maskWeights) {
   // 1. white balance: +temp warms (red up, blue down), +tint goes magenta
   if (s.temp !== 0 || s.tint !== 0) {
     r *= Math.pow(2, TONE.WB_TEMP_EV * s.temp);
@@ -180,6 +276,16 @@ export function applyTonePixel(r, g, b, s) {
     r *= gain;
     g *= gain;
     b *= gain;
+  }
+
+  // 5.5 local masks: each mask's own adjustment set, applied through its
+  // per-pixel weight (Lightroom layering: locals stack on the globals)
+  if (maskWeights && s.masks) {
+    for (let i = 0; i < s.masks.length; i++) {
+      const m = maskWeights[i];
+      if (m <= 0) continue;
+      [r, g, b] = applyMaskAdjust(r, g, b, s.masks[i].adjustments, m);
+    }
   }
 
   // 6. vibrance / saturation: scale chroma around Rec.709 luma. Vibrance is
@@ -298,19 +404,33 @@ export function cropPixelRect(crop, width, height) {
  *   crop; defaults to the full image
  */
 export function toneMapRows(image, settings, out, rowStart, rowEnd, rect) {
-  const { data, width, colors, bits } = image;
+  const { data, width, height, colors, bits } = image;
   const rx = rect ? rect.x : 0;
   const ry = rect ? rect.y : 0;
   const rw = rect ? rect.w : width;
   const maxVal = bits === 16 ? 65535 : 255;
+  // Mask geometry is normalized to the full image, so weights are computed
+  // from uncropped pixel coordinates.
+  const masks = settings.masks?.length ? settings.masks : null;
+  const prepared = masks
+    ? masks.map((mk) => prepareMask(mk, width, height))
+    : null;
+  const weights = masks ? new Float64Array(masks.length) : undefined;
   for (let yRow = rowStart; yRow < rowEnd; yRow++) {
     let src = ((yRow + ry) * width + rx) * colors;
     let dst = yRow * rw * 4;
+    const py = yRow + ry + 0.5;
     for (let x = 0; x < rw; x++) {
       const r = decodeInput(data[src] / maxVal);
       const g = decodeInput(data[src + 1] / maxVal);
       const b = decodeInput(data[src + 2] / maxVal);
-      const [or, og, ob] = applyTonePixel(r, g, b, settings);
+      if (prepared && weights) {
+        const px = x + rx + 0.5;
+        for (let j = 0; j < prepared.length; j++) {
+          weights[j] = maskWeight(prepared[j], px, py);
+        }
+      }
+      const [or, og, ob] = applyTonePixel(r, g, b, settings, weights);
       // Uint8ClampedArray assignment rounds to nearest on its own.
       out[dst] = or * 255;
       out[dst + 1] = og * 255;

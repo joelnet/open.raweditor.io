@@ -7,6 +7,7 @@ import { autoWhiteBalance, autoTone } from "./tone/auto.js";
 import { buildPanel } from "./ui/panel.js";
 import { initHistogram } from "./ui/histogram.js";
 import { initCrop } from "./ui/crop.js";
+import { initMasks } from "./ui/masks.js";
 import { initZoom } from "./ui/zoom.js";
 import { initDropzone } from "./ui/dropzone.js";
 import { initDivider } from "./ui/divider.js";
@@ -48,17 +49,25 @@ function queueRender() {
   renderQueued = true;
   requestAnimationFrame(() => {
     renderQueued = false;
-    const settings = panel.effectiveSettings(store.get());
+    const settings = effectiveSettings();
     // crop mode shows the full frame under the overlay; otherwise the
     // zoom/pan window inside the crop. The histogram always reflects the
     // crop — what an export would contain — regardless of zoom.
-    renderer.render(settings, crop.isActive() ? FULL_VIEW : zoom.view());
+    renderer.render(settings, crop.isActive() ? FULL_VIEW : zoom.view(), {
+      maskOverlay: masks.overlayIndex(),
+    });
     if (histo.visible()) {
       histo.draw(renderer.computeHistogram(settings, crop.rect()));
     }
   });
 }
 store.subscribe(queueRender);
+
+/** Sliders with section bypasses applied, then disabled masks neutralized —
+ * what the preview, histogram, and export should actually apply. */
+function effectiveSettings() {
+  return masks.effective(panel.effectiveSettings(store.get()));
+}
 
 // --- layout: fit canvas to viewport at the visible region's aspect ---
 
@@ -81,6 +90,7 @@ function layout() {
     Math.min(Math.round(cssH * dpr), Math.round(srcH)),
   );
   crop.reposition();
+  masks.reposition();
   queueRender();
 }
 window.addEventListener("resize", layout);
@@ -93,6 +103,7 @@ async function openFile(file) {
   opening = true;
   panel.setEnabled(false);
   crop.setEnabled(false);
+  masks.setEnabled(false);
   status.setFile(`Decoding ${file.name}…`);
   status.setProgress("");
   try {
@@ -108,12 +119,15 @@ async function openFile(file) {
     canvas.hidden = false;
     dropzone.setVisible(false);
     panel.resetBypass();
+    masks.resetBypass();
     crop.setImage(preview.width, preview.height, meta.width, meta.height);
+    masks.setImage(preview.width, preview.height);
     zoom.reset();
     zoom.setEnabled(true);
     store.set({ ...ZERO_SETTINGS });
     layout();
     panel.setEnabled(true);
+    masks.setEnabled(true);
     histo.setHasImage(true);
     histo.setExif(meta);
     status.setFile(
@@ -136,6 +150,7 @@ async function openFile(file) {
     if (currentFile) {
       panel.setEnabled(true);
       crop.setEnabled(true);
+      masks.setEnabled(true);
     }
   }
 }
@@ -146,7 +161,7 @@ async function openFile(file) {
 async function onExport(format) {
   if (!currentFile || opening) return;
   const file = currentFile;
-  const settings = panel.effectiveSettings(store.get());
+  const settings = effectiveSettings();
   const cropRect = crop.rect();
   panel.setExportBusy(true, format);
   try {
@@ -194,13 +209,21 @@ const crop = initCrop(viewport, canvas, panelScroll, {
   onRectChange: () => (crop.isActive() ? queueRender() : layout()),
   onModeChange: (active) => {
     zoom.setEnabled(!active && !!previewSize);
+    masks.setCropActive(active);
     layout();
   },
 });
 const zoom = initZoom(canvas, viewport, {
   getBounds: () => crop.rect(),
   getImageSize: () => previewSize,
-  onChange: queueRender,
+  onChange: () => {
+    masks.reposition(); // the overlay maps masks through the zoom window
+    queueRender();
+  },
+});
+const masks = initMasks(viewport, canvas, panelScroll, store, {
+  getView: () => zoom.view(),
+  onUiChange: queueRender,
 });
 // Auto WB / auto tone: image statistics over the cropped preview. Auto tone
 // runs downstream of white balance, so it sees the current effective WB.
@@ -220,10 +243,12 @@ function onAuto(title) {
   }
 }
 
-// Revert: back to the just-opened state — sliders, crop, bypass, and zoom.
+// Revert: back to the just-opened state — sliders, masks, crop, bypass,
+// and zoom.
 function onRevert() {
   if (!previewSize) return;
   panel.resetBypass();
+  masks.resetBypass();
   crop.reset();
   zoom.reset();
   zoom.setEnabled(true); // crop.reset() may have silently left crop mode
