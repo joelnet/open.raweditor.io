@@ -619,6 +619,38 @@ button:disabled {
   border-color: var(--accent-red);
 }
 
+.section.section-install {
+  border-left-color: var(--accent-blue);
+}
+
+.install-body {
+  padding: 10px 12px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.install-body button {
+  min-width: 0;
+}
+
+.install-body button:hover:not(:disabled) {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.install-hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* Belt and braces: never show install UI inside the installed app. */
+@media (display-mode: standalone) {
+  .section.section-install {
+    display: none;
+  }
+}
+
 .section-header {
   display: flex;
   align-items: center;

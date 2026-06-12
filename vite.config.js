@@ -36,7 +36,25 @@ export default defineConfig({
       // silently swapping assets out from under a session.
       registerType: "prompt",
       injectRegister: false,
-      manifest: false,
+      manifest: {
+        name: "RAW Editor",
+        short_name: "RAW Editor",
+        description: "In-browser RAW photo editor",
+        start_url: "/",
+        display: "standalone",
+        background_color: "#10141f",
+        theme_color: "#141927",
+        icons: [
+          { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+          { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+          {
+            src: "/icons/icon-maskable-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
+        ],
+      },
       workbox: {
         globPatterns: ["**/*.{html,js,css,wasm}"],
         // No skipWaiting — the page sends SKIP_WAITING when the user opts
