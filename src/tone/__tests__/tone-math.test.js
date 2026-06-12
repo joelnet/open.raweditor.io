@@ -218,6 +218,91 @@ test("hueColor hits the primaries and secondaries", () => {
   assert.deepEqual(hueColor(1), [1, 0, 0]); // wraps
 });
 
+test("color mixer leaves neutral gray unchanged at any slider extreme", () => {
+  for (const v of [0, 0.05, 0.18, 0.7, 1]) {
+    const [base] = applyTonePixel(v, v, v, ZERO_SETTINGS);
+    for (const patch of [
+      { hslRedHue: 1, hslRedSat: 1, hslRedLum: 1 },
+      { hslGreenSat: -1, hslBlueSat: -1, hslMagentaLum: -1 },
+    ]) {
+      const [r, g, b] = applyTonePixel(v, v, v, settings(patch));
+      assert.ok(Math.abs(r - base) < EPS, JSON.stringify(patch));
+      assert.equal(r, g);
+      assert.equal(g, b);
+    }
+  }
+});
+
+test("color mixer band saturation -1 collapses its band to gray", () => {
+  // saturated red: sat slider -1 zeroes HSV saturation, leaving value (max)
+  const [r, g, b] = applyTonePixel(0.5, 0.1, 0.1, settings({ hslRedSat: -1 }));
+  const expected = srgbEncode(0.5);
+  assert.ok(Math.abs(r - expected) < EPS);
+  assert.ok(Math.abs(g - expected) < EPS);
+  assert.ok(Math.abs(b - expected) < EPS);
+});
+
+test("color mixer red sliders leave a pure green pixel alone", () => {
+  const base = applyTonePixel(0.1, 0.5, 0.1, ZERO_SETTINGS);
+  const out = applyTonePixel(
+    0.1,
+    0.5,
+    0.1,
+    settings({ hslRedHue: 1, hslRedSat: 1, hslRedLum: 1 }),
+  );
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(out[c] - base[c]) < EPS, `channel ${c}`);
+  }
+});
+
+test("color mixer hue +1 rotates red toward orange, -1 toward magenta", () => {
+  const base = applyTonePixel(0.5, 0.1, 0.1, ZERO_SETTINGS);
+  const toOrange = applyTonePixel(0.5, 0.1, 0.1, settings({ hslRedHue: 1 }));
+  assert.ok(toOrange[1] > base[1] + 1e-3); // green channel rises
+  assert.ok(Math.abs(toOrange[0] - base[0]) < EPS);
+  assert.ok(Math.abs(toOrange[2] - base[2]) < EPS);
+  const toMagenta = applyTonePixel(0.5, 0.1, 0.1, settings({ hslRedHue: -1 }));
+  assert.ok(toMagenta[2] > base[2] + 1e-3); // blue channel rises
+  assert.ok(Math.abs(toMagenta[0] - base[0]) < EPS);
+  assert.ok(Math.abs(toMagenta[1] - base[1]) < EPS);
+});
+
+test("color mixer luminance +1 doubles its band, leaves others alone", () => {
+  const lifted = applyTonePixel(0.2, 0.05, 0.05, settings({ hslRedLum: 1 }));
+  const doubled = applyTonePixel(0.4, 0.1, 0.1, ZERO_SETTINGS);
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(lifted[c] - doubled[c]) < EPS, `channel ${c}`);
+  }
+  const other = applyTonePixel(0.2, 0.05, 0.05, settings({ hslGreenLum: 1 }));
+  const base = applyTonePixel(0.2, 0.05, 0.05, ZERO_SETTINGS);
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(other[c] - base[c]) < EPS, `channel ${c}`);
+  }
+});
+
+test("color mixer crossfades adjacent bands midway between centers", () => {
+  // hue exactly between red (0°) and orange (30°): both bands weigh 1/2,
+  // so opposite full hue shifts cancel. The mixer sees sRGB-encoded
+  // values, so the 15° hue is constructed encoded: r max, b min,
+  // (g-b)/(r-b) = 15/60 = 0.25.
+  const er = 0.7;
+  const eb = 0.2;
+  const eg = eb + 0.25 * (er - eb);
+  const px = /** @type {[number, number, number]} */ ([
+    srgbDecode(er),
+    srgbDecode(eg),
+    srgbDecode(eb),
+  ]);
+  const base = applyTonePixel(...px, ZERO_SETTINGS);
+  const out = applyTonePixel(
+    ...px,
+    settings({ hslRedHue: 1, hslOrangeHue: -1 }),
+  );
+  for (let c = 0; c < 3; c++) {
+    assert.ok(Math.abs(out[c] - base[c]) < EPS, `channel ${c}`);
+  }
+});
+
 test("gradeWeights: shadows own black, highlights own white", () => {
   const [s0, m0, h0] = gradeWeights(0, 0.5, 0);
   assert.equal(s0, 1);
@@ -378,6 +463,22 @@ test("output stays in [0,1] under extreme settings", () => {
       gradeHighLum: 1,
       gradeBlending: 1,
       gradeBalance: -1,
+    }),
+    settings({
+      hslRedHue: 1,
+      hslRedSat: 1,
+      hslRedLum: 1,
+      hslOrangeHue: -1,
+      hslOrangeSat: -1,
+      hslOrangeLum: -1,
+      hslYellowSat: 1,
+      hslGreenLum: -1,
+      hslAquaHue: 1,
+      hslBlueSat: 1,
+      hslBlueLum: 1,
+      hslPurpleHue: -1,
+      hslMagentaSat: -1,
+      hslMagentaLum: 1,
     }),
   ];
   for (const s of extremes) {

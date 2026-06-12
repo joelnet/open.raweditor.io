@@ -1,7 +1,7 @@
 // Pure-JS tone pipeline. The preview shader in gl/shaders.js implements the
 // exact same steps on the GPU; keep the two line-for-line in sync.
 
-import { TONE, GRADE, INPUT_TRANSFER, LUMA } from "./constants.js";
+import { TONE, GRADE, HSL, INPUT_TRANSFER, LUMA } from "./constants.js";
 import { prepareMask, maskWeight } from "./mask-math.js";
 import {
   ZERO_GEOMETRY,
@@ -19,6 +19,16 @@ import {
  *             highlights: number, shadows: number, whites: number,
  *             blacks: number, texture: number, clarity: number,
  *             dehaze: number, vibrance: number, saturation: number,
+ *             hslRedHue: number, hslRedSat: number, hslRedLum: number,
+ *             hslOrangeHue: number, hslOrangeSat: number,
+ *             hslOrangeLum: number, hslYellowHue: number,
+ *             hslYellowSat: number, hslYellowLum: number,
+ *             hslGreenHue: number, hslGreenSat: number, hslGreenLum: number,
+ *             hslAquaHue: number, hslAquaSat: number, hslAquaLum: number,
+ *             hslBlueHue: number, hslBlueSat: number, hslBlueLum: number,
+ *             hslPurpleHue: number, hslPurpleSat: number,
+ *             hslPurpleLum: number, hslMagentaHue: number,
+ *             hslMagentaSat: number, hslMagentaLum: number,
  *             gradeShadowHue: number, gradeShadowSat: number,
  *             gradeShadowLum: number, gradeMidHue: number,
  *             gradeMidSat: number, gradeMidLum: number,
@@ -43,6 +53,30 @@ export const ZERO_SETTINGS = Object.freeze({
   dehaze: 0,
   vibrance: 0,
   saturation: 0,
+  hslRedHue: 0,
+  hslRedSat: 0,
+  hslRedLum: 0,
+  hslOrangeHue: 0,
+  hslOrangeSat: 0,
+  hslOrangeLum: 0,
+  hslYellowHue: 0,
+  hslYellowSat: 0,
+  hslYellowLum: 0,
+  hslGreenHue: 0,
+  hslGreenSat: 0,
+  hslGreenLum: 0,
+  hslAquaHue: 0,
+  hslAquaSat: 0,
+  hslAquaLum: 0,
+  hslBlueHue: 0,
+  hslBlueSat: 0,
+  hslBlueLum: 0,
+  hslPurpleHue: 0,
+  hslPurpleSat: 0,
+  hslPurpleLum: 0,
+  hslMagentaHue: 0,
+  hslMagentaSat: 0,
+  hslMagentaLum: 0,
   gradeShadowHue: 0,
   gradeShadowSat: 0,
   gradeShadowLum: 0,
@@ -122,6 +156,25 @@ export function hueColor(h) {
   const b = Math.min(Math.max(2 - Math.abs(6 * t - 4), 0), 1);
   return [r, g, b];
 }
+
+/**
+ * Settings keys of the color mixer's bands as [hue, sat, lum] triples, in
+ * HSL.CENTERS order (red → magenta). Shared with the renderer, which packs
+ * the same triples into the u_hsl uniform array.
+ * @type {readonly (readonly [SettingsKey, SettingsKey, SettingsKey])[]}
+ */
+export const HSL_BAND_KEYS = /** @type {const} */ ([
+  ["hslRedHue", "hslRedSat", "hslRedLum"],
+  ["hslOrangeHue", "hslOrangeSat", "hslOrangeLum"],
+  ["hslYellowHue", "hslYellowSat", "hslYellowLum"],
+  ["hslGreenHue", "hslGreenSat", "hslGreenLum"],
+  ["hslAquaHue", "hslAquaSat", "hslAquaLum"],
+  ["hslBlueHue", "hslBlueSat", "hslBlueLum"],
+  ["hslPurpleHue", "hslPurpleSat", "hslPurpleLum"],
+  ["hslMagentaHue", "hslMagentaSat", "hslMagentaLum"],
+]);
+
+/** @typedef {Exclude<keyof ToneSettings, "masks">} SettingsKey */
 
 /**
  * Pegtop soft-light blend: smooth, identity at blend 0.5, and pins black
@@ -327,6 +380,65 @@ export function applyTonePixel(r, g, b, s, maskWeights) {
     r = y + (r - y) * factor;
     g = y + (g - y) * factor;
     b = y + (b - y) * factor;
+  }
+
+  // 6.5 HSL color mixer: per-hue-band hue rotation, saturation scale, and
+  // luminance gain, in HSV over the display-referred (sRGB-encoded) values
+  // — hue computed on linear RGB would disagree with the colors users see
+  // (RawTherapee's HSV equalizer encodes for the same reason). A pixel's
+  // hue selects its two adjacent bands; their adjustments crossfade with a
+  // smoothstep (weights always sum to 1 — no gaps, no banding) and apply
+  // once. Hue and luminance are gated by saturation so neutral pixels,
+  // whose hue is noise, never move; the sat gain self-gates (× sat).
+  let mixing = false;
+  for (const band of HSL_BAND_KEYS) {
+    if (s[band[0]] !== 0 || s[band[1]] !== 0 || s[band[2]] !== 0) {
+      mixing = true;
+      break;
+    }
+  }
+  if (mixing) {
+    const er = srgbEncode(Math.min(Math.max(r, 0), 1));
+    const eg = srgbEncode(Math.min(Math.max(g, 0), 1));
+    const eb = srgbEncode(Math.min(Math.max(b, 0), 1));
+    const mx = Math.max(er, eg, eb);
+    const mn = Math.min(er, eg, eb);
+    const ch = mx - mn;
+    if (ch > 1e-9) {
+      let h;
+      if (mx === er) h = (eg - eb) / ch / 6;
+      else if (mx === eg) h = (2 + (eb - er) / ch) / 6;
+      else h = (4 + (er - eg) / ch) / 6;
+      if (h < 0) h += 1;
+      const sat = ch / mx;
+      // red's center sits at hue 0, so every h lands in exactly one
+      // segment [center_i, center_i+1) with the last wrapping back to red
+      let seg = HSL_BAND_KEYS.length - 1;
+      for (let k = 0; k + 1 < HSL.CENTERS.length; k++) {
+        if (h < HSL.CENTERS[k + 1]) {
+          seg = k;
+          break;
+        }
+      }
+      const c1 = seg + 1 < HSL.CENTERS.length ? HSL.CENTERS[seg + 1] : 1;
+      const t = smoothstep(HSL.CENTERS[seg], c1, h);
+      const lo = HSL_BAND_KEYS[seg];
+      const hi = HSL_BAND_KEYS[(seg + 1) % HSL_BAND_KEYS.length];
+      const aw = smoothstep(HSL.SAT_FEATHER[0], HSL.SAT_FEATHER[1], sat);
+      const dH = (s[lo[0]] * (1 - t) + s[hi[0]] * t) * HSL.HUE_RANGE * aw;
+      const dS = s[lo[1]] * (1 - t) + s[hi[1]] * t;
+      const dL = (s[lo[2]] * (1 - t) + s[hi[2]] * t) * aw;
+      const s2 = Math.min(Math.max(sat * (1 + dS), 0), 1);
+      const [hr, hg, hb] = hueColor(h + dH);
+      const gain = Math.pow(2, HSL.LUM_EV * dL);
+      r = Math.min(srgbDecode(mx * (1 + (hr - 1) * s2)) * gain, 1);
+      g = Math.min(srgbDecode(mx * (1 + (hg - 1) * s2)) * gain, 1);
+      b = Math.min(srgbDecode(mx * (1 + (hb - 1) * s2)) * gain, 1);
+    } else {
+      r = Math.min(Math.max(r, 0), 1);
+      g = Math.min(Math.max(g, 0), 1);
+      b = Math.min(Math.max(b, 0), 1);
+    }
   }
 
   // 7. color grading: per-zone luminance gain (linear light), then per-zone

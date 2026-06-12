@@ -153,6 +153,55 @@ export const COLOR_SLIDERS = /** @type {const} */ ([
 ]);
 
 /**
+ * Color mixer bands (Lightroom HSL): hue shift, saturation, and luminance
+ * sliders per band, all stored in [-1, +1]. Band order matches
+ * HSL.CENTERS in tone/constants.js — keep the two lists in sync.
+ * @typedef {{ label: string, hue: SliderKey, sat: SliderKey,
+ *             lum: SliderKey }} HslBand
+ * @type {readonly HslBand[]}
+ */
+export const HSL_BANDS = [
+  { label: "RED", hue: "hslRedHue", sat: "hslRedSat", lum: "hslRedLum" },
+  {
+    label: "ORANGE",
+    hue: "hslOrangeHue",
+    sat: "hslOrangeSat",
+    lum: "hslOrangeLum",
+  },
+  {
+    label: "YELLOW",
+    hue: "hslYellowHue",
+    sat: "hslYellowSat",
+    lum: "hslYellowLum",
+  },
+  {
+    label: "GREEN",
+    hue: "hslGreenHue",
+    sat: "hslGreenSat",
+    lum: "hslGreenLum",
+  },
+  { label: "AQUA", hue: "hslAquaHue", sat: "hslAquaSat", lum: "hslAquaLum" },
+  { label: "BLUE", hue: "hslBlueHue", sat: "hslBlueSat", lum: "hslBlueLum" },
+  {
+    label: "PURPLE",
+    hue: "hslPurpleHue",
+    sat: "hslPurpleSat",
+    lum: "hslPurpleLum",
+  },
+  {
+    label: "MAGENTA",
+    hue: "hslMagentaHue",
+    sat: "hslMagentaSat",
+    lum: "hslMagentaLum",
+  },
+];
+
+/** Every store key the COLOR MIXER section owns (for bypass zeroing). */
+export const HSL_KEYS = /** @type {readonly SliderKey[]} */ (
+  HSL_BANDS.flatMap((b) => [b.hue, b.sat, b.lum])
+);
+
+/**
  * Color grading zones (Lightroom 3-way): one color wheel (hue/sat) plus a
  * luminance slider per zone. Hues are stored in turns [0, 1), sats in [0, 1].
  * @typedef {{ label: string, hue: SliderKey, sat: SliderKey,
@@ -212,9 +261,10 @@ export const GRADE_KEYS = /** @type {readonly SliderKey[]} */ ([
 
 /**
  * Sidebar sections, in display order. `auto` adds an AUTO button; `grading`
- * swaps the default slider list for the color-grading wheel UI.
+ * swaps the default slider list for the color-grading wheel UI; `mixer`
+ * swaps it for the per-band HSL color mixer UI.
  * @typedef {{ title: string, sliders: readonly SliderDef[], auto: boolean,
- *             grading?: boolean }} Section
+ *             grading?: boolean, mixer?: boolean }} Section
  * @type {readonly Section[]}
  */
 export const SECTIONS = [
@@ -222,6 +272,7 @@ export const SECTIONS = [
   { title: "TONE", sliders: TONE_SLIDERS, auto: true },
   { title: "PRESENCE", sliders: PRESENCE_SLIDERS, auto: false },
   { title: "COLOR", sliders: COLOR_SLIDERS, auto: false },
+  { title: "COLOR MIXER", sliders: [], auto: false, mixer: true },
   {
     title: "COLOR GRADING",
     sliders: GRADE_SLIDERS,

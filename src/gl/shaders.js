@@ -11,6 +11,7 @@
 import {
   TONE,
   GRADE,
+  HSL,
   SPATIAL,
   MASK,
   INPUT_TRANSFER,
@@ -67,6 +68,7 @@ uniform float u_clarity;        // [-1, 1]
 uniform float u_dehaze;         // [-1, 1]
 uniform float u_vibrance;       // [-1, 1]
 uniform float u_saturation;     // [-1, 1]
+uniform vec3 u_hsl[${HSL.CENTERS.length}]; // per-band hue, sat, lum, each [-1, 1]
 uniform float u_gradeShadowHue; // turns [0, 1)
 uniform float u_gradeShadowSat; // [0, 1]
 uniform float u_gradeShadowLum; // [-1, 1]
@@ -116,6 +118,13 @@ vec3 srgbEncode(vec3 c) {
   return mix(b, a, vec3(lo));
 }
 
+vec3 srgbDecode(vec3 c) {
+  bvec3 lo = lessThanEqual(c, vec3(0.04045));
+  vec3 a = c / 12.92;
+  vec3 b = pow((c + 0.055) / 1.055, vec3(2.4));
+  return mix(b, a, vec3(lo));
+}
+
 // pure wheel hue → RGB — mirrors hueColor() in tone-math.js
 vec3 hueColor(float h) {
   float t = fract(h);
@@ -130,6 +139,11 @@ vec3 hueColor(float h) {
 vec3 softLight(vec3 a, vec3 b) {
   return (1.0 - 2.0 * b) * a * a + 2.0 * b * a;
 }
+
+// color mixer band centers in hue turns — mirrors HSL.CENTERS
+const float HSL_CENTERS[${HSL.CENTERS.length}] = float[${HSL.CENTERS.length}](
+  ${HSL.CENTERS.map(f).join(", ")}
+);
 
 // One à trous band's texture boost — mirrors textureDelta() in spatial.js.
 // Positive: amplify what exceeds the band's noise floor; negative:
@@ -339,6 +353,49 @@ void main() {
     float w = u_vibrance >= 0.0 ? 1.0 - sat : sat;
     float factor = max((1.0 + u_saturation) * (1.0 + u_vibrance * w), 0.0);
     rgb = vec3(y) + (rgb - vec3(y)) * factor;
+  }
+
+  // 6.5 HSL color mixer: per-hue-band hue rotation, saturation scale, and
+  // luminance gain, in HSV over the display-referred (sRGB-encoded) values
+  // — hue computed on linear RGB would disagree with the colors users see
+  // (RawTherapee's HSV equalizer encodes for the same reason). A pixel's
+  // hue selects its two adjacent bands; their adjustments crossfade with a
+  // smoothstep (weights always sum to 1 — no gaps, no banding) and apply
+  // once. Hue and luminance are gated by saturation so neutral pixels,
+  // whose hue is noise, never move; the sat gain self-gates (× sat).
+  bool mixing = false;
+  for (int i = 0; i < ${HSL.CENTERS.length}; i++) {
+    if (u_hsl[i] != vec3(0.0)) { mixing = true; break; }
+  }
+  if (mixing) {
+    vec3 e = srgbEncode(clamp(rgb, 0.0, 1.0));
+    float mx = max(e.r, max(e.g, e.b));
+    float mn = min(e.r, min(e.g, e.b));
+    float ch = mx - mn;
+    if (ch > 1e-9) {
+      float h;
+      if (mx == e.r) h = (e.g - e.b) / ch / 6.0;
+      else if (mx == e.g) h = (2.0 + (e.b - e.r) / ch) / 6.0;
+      else h = (4.0 + (e.r - e.g) / ch) / 6.0;
+      if (h < 0.0) h += 1.0;
+      float sat = ch / mx;
+      // red's center sits at hue 0, so every h lands in exactly one
+      // segment [center_i, center_i+1) with the last wrapping back to red
+      int seg = ${HSL.CENTERS.length - 1};
+      for (int k = 0; k + 1 < ${HSL.CENTERS.length}; k++) {
+        if (h < HSL_CENTERS[k + 1]) { seg = k; break; }
+      }
+      float c1 = seg + 1 < ${HSL.CENTERS.length} ? HSL_CENTERS[seg + 1] : 1.0;
+      float t = smoothstep(HSL_CENTERS[seg], c1, h);
+      vec3 adj = mix(u_hsl[seg], u_hsl[(seg + 1) % ${HSL.CENTERS.length}], t);
+      float aw = smoothstep(${f(HSL.SAT_FEATHER[0])}, ${f(HSL.SAT_FEATHER[1])}, sat);
+      float dH = adj.x * ${f(HSL.HUE_RANGE)} * aw;
+      float s2 = clamp(sat * (1.0 + adj.y), 0.0, 1.0);
+      rgb = min(srgbDecode(mx * (vec3(1.0) + (hueColor(h + dH) - 1.0) * s2))
+        * exp2(${f(HSL.LUM_EV)} * adj.z * aw), 1.0);
+    } else {
+      rgb = clamp(rgb, 0.0, 1.0);
+    }
   }
 
   // 7. color grading: per-zone luminance gain (linear light), then per-zone

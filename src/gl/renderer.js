@@ -4,6 +4,7 @@
 
 import { VERTEX_SHADER, FRAGMENT_SHADER } from "./shaders.js";
 import { MASK } from "../tone/constants.js";
+import { HSL_BAND_KEYS } from "../tone/tone-math.js";
 import { ZERO_GEOMETRY, orientedDims, coverScale } from "../tone/geometry.js";
 
 /**
@@ -129,6 +130,7 @@ export function createRenderer(canvas) {
   const locMaskAdjB = gl.getUniformLocation(program, "u_maskAdjB");
   const locMaskAdjC = gl.getUniformLocation(program, "u_maskAdjC");
   const locMaskOverlay = gl.getUniformLocation(program, "u_maskOverlay");
+  const locHsl = gl.getUniformLocation(program, "u_hsl");
   const locHasAux = gl.getUniformLocation(program, "u_hasAux");
   const locAirlight = gl.getUniformLocation(program, "u_airlight");
   gl.uniform1i(gl.getUniformLocation(program, "u_image"), 0);
@@ -136,6 +138,10 @@ export function createRenderer(canvas) {
   gl.uniform1i(gl.getUniformLocation(program, "u_detail"), 2);
   gl.uniform1i(gl.getUniformLocation(program, "u_dehazeD"), 3);
   gl.uniform1i(locHasAux, 0);
+
+  // Packed color-mixer band staging (hue, sat, lum per band), reused
+  // across draws.
+  const hslVals = new Float32Array(HSL_BAND_KEYS.length * 3);
 
   // Packed mask uniform staging, reused across draws.
   const maskGeo = new Float32Array(MASK.MAX * 4);
@@ -157,6 +163,13 @@ export function createRenderer(canvas) {
     for (const name of UNIFORMS) {
       gl.uniform1f(loc[name], settings[name]);
     }
+    for (let i = 0; i < HSL_BAND_KEYS.length; i++) {
+      const [hue, sat, lum] = HSL_BAND_KEYS[i];
+      hslVals[i * 3] = settings[hue];
+      hslVals[i * 3 + 1] = settings[sat];
+      hslVals[i * 3 + 2] = settings[lum];
+    }
+    gl.uniform3fv(locHsl, hslVals);
     gl.uniform2f(locViewOffset, view.x, view.y);
     gl.uniform2f(locViewScale, view.w, view.h);
 

@@ -22,6 +22,43 @@ export const TONE = {
 };
 
 /**
+ * Color mixer (Lightroom HSL panel): per-band hue / saturation / luminance.
+ * The algorithm follows the open-source consensus: HSV over display-referred
+ * (sRGB-encoded) RGB à la RawTherapee's HSV equalizer; a pixel's hue
+ * selects the two adjacent bands and smoothstep-crossfades their
+ * *adjustments* before applying once (FlexMonkey MultiBandHSV, GIMP
+ * hue-saturation — interpolating results instead breaks at the red/magenta
+ * wraparound, GIMP bug #527085); hue shifts additively, saturation is a
+ * gain, luminance an EV gain in linear light (darktable color zones).
+ * Hue and luminance are gated by saturation so near-neutral pixels — whose
+ * hue is sensor noise — never move (darktable color equalizer's logistic
+ * gate); the saturation gain self-gates because it multiplies sat.
+ */
+export const HSL = {
+  /** Band center hues in turns: red, orange, yellow, green, aqua, blue,
+   *  purple, magenta. Non-uniform on purpose — Lightroom keeps the warm
+   *  (skin-tone) bands narrow and the green–blue bands wide. */
+  CENTERS: [
+    0,
+    30 / 360,
+    60 / 360,
+    120 / 360,
+    180 / 360,
+    240 / 360,
+    270 / 360,
+    300 / 360,
+  ],
+  /** Hue slider ±1 rotates the band by ±HUE_RANGE turns (±30° — one warm
+   *  band over, Lightroom's reach). */
+  HUE_RANGE: 30 / 360,
+  /** Luminance slider ±1 gains the band by ±LUM_EV EV (linear light). */
+  LUM_EV: 1.0,
+  /** smoothstep edges (on HSV saturation) where hue/luminance fade in —
+   *  inflection ~10%, near color equalizer's logistic gate at ~6%. */
+  SAT_FEATHER: [0.0, 0.2],
+};
+
+/**
  * Color grading (Lightroom-style split toning): per-zone hue/sat tints and
  * luminance gains, weighted by smoothstep masks on sqrt-luma. Mask shape
  * follows darktable's color balance rgb (masked zones) and splittoning

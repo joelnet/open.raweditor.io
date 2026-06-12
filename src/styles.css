@@ -568,6 +568,16 @@ button:disabled {
     width: 17px;
     height: 17px;
   }
+
+  .mx-tab {
+    width: 32px;
+    height: 32px;
+  }
+
+  .mx-dot {
+    width: 15px;
+    height: 15px;
+  }
 }
 
 .section {
@@ -754,6 +764,66 @@ button:disabled {
 .slider-row input[type="range"]:disabled {
   cursor: default;
   opacity: 0.4;
+}
+
+/* ---- color mixer: Lightroom-style band dots + H/S/L sliders ---- */
+
+.mx-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 12px 2px;
+}
+
+.mx-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mx-tab:hover:not(:disabled) {
+  border-color: var(--panel-edge);
+}
+
+.mx-tab.active {
+  border-color: var(--accent-blue);
+}
+
+.mx-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.mx-band[hidden] {
+  display: none;
+}
+
+.mx-band-label {
+  padding-top: 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  user-select: none;
+}
+
+.section.bypassed .mx-tab,
+.section.bypassed .mx-band-label {
+  opacity: 0.45;
+}
+
+.section.bypassed .mx-tabs {
+  pointer-events: none;
 }
 
 /* ---- color grading: Lightroom-style tab strip + hue/sat wheels ---- */

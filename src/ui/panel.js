@@ -3,8 +3,9 @@
 // colored left accent bars, uppercase monospace headers, green/red value
 // readouts.
 
-import { SECTIONS, GRADE_KEYS } from "../state.js";
+import { SECTIONS, GRADE_KEYS, HSL_KEYS } from "../state.js";
 import { buildGrading } from "./grading.js";
+import { buildMixer } from "./mixer.js";
 
 export const EYE_OPEN =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
@@ -141,6 +142,8 @@ export function buildPanel(
 
     if (sectionDef.grading) {
       buildGrading(section, store, (def) => makeRow(def, entry));
+    } else if (sectionDef.mixer) {
+      buildMixer(section, (def) => makeRow(def, entry));
     } else {
       for (const def of sliders) section.append(makeRow(def, entry));
     }
@@ -231,7 +234,11 @@ export function buildPanel(
       const out = { ...settings };
       for (const sec of SECTIONS) {
         if (!bypassed.has(sec.title)) continue;
-        const keys = sec.grading ? GRADE_KEYS : sec.sliders.map((d) => d.key);
+        const keys = sec.grading
+          ? GRADE_KEYS
+          : sec.mixer
+            ? HSL_KEYS
+            : sec.sliders.map((d) => d.key);
         for (const key of keys) out[key] = 0;
       }
       return out;
