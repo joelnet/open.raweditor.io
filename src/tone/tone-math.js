@@ -17,7 +17,8 @@ import {
  * as immutable — always replace it, never mutate in place.
  * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
  *             highlights: number, shadows: number, whites: number,
- *             blacks: number, vibrance: number, saturation: number,
+ *             blacks: number, texture: number, clarity: number,
+ *             dehaze: number, vibrance: number, saturation: number,
  *             gradeShadowHue: number, gradeShadowSat: number,
  *             gradeShadowLum: number, gradeMidHue: number,
  *             gradeMidSat: number, gradeMidLum: number,
@@ -37,6 +38,9 @@ export const ZERO_SETTINGS = Object.freeze({
   shadows: 0,
   whites: 0,
   blacks: 0,
+  texture: 0,
+  clarity: 0,
+  dehaze: 0,
   vibrance: 0,
   saturation: 0,
   gradeShadowHue: 0,
@@ -90,6 +94,18 @@ export function decodeInput(v) {
   if (INPUT_TRANSFER === "linear") return v;
   // Inverse BT.709 OETF (LibRaw default gamma 2.222 with 4.5 toe slope).
   return v < 0.081 ? v / 4.5 : Math.pow((v + 0.099) / 1.099, 1 / 0.45);
+}
+
+/**
+ * Encode one linear-light sample back to LibRaw's transfer curve — the
+ * inverse of decodeInput(), used when the presence pre-pass writes its
+ * result back into the decoded buffer.
+ * @param {number} v linear [0,1]
+ */
+export function encodeInput(v) {
+  if (INPUT_TRANSFER === "linear") return v;
+  // BT.709 OETF (breakpoint 0.018 = 0.081 / 4.5).
+  return v < 0.018 ? v * 4.5 : 1.099 * Math.pow(v, 0.45) - 0.099;
 }
 
 /**

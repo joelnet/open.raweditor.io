@@ -100,6 +100,37 @@ export const TONE_SLIDERS = /** @type {const} */ ([
 ]);
 
 /** @type {readonly SliderDef[]} */
+export const PRESENCE_SLIDERS = /** @type {const} */ ([
+  {
+    key: "texture",
+    label: "TEXTURE",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "clarity",
+    label: "CLARITY",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "dehaze",
+    label: "DEHAZE",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+]);
+
+/** @type {readonly SliderDef[]} */
 export const COLOR_SLIDERS = /** @type {const} */ ([
   {
     key: "vibrance",
@@ -189,6 +220,7 @@ export const GRADE_KEYS = /** @type {readonly SliderKey[]} */ ([
 export const SECTIONS = [
   { title: "WHITE BALANCE", sliders: WB_SLIDERS, auto: true },
   { title: "TONE", sliders: TONE_SLIDERS, auto: true },
+  { title: "PRESENCE", sliders: PRESENCE_SLIDERS, auto: false },
   { title: "COLOR", sliders: COLOR_SLIDERS, auto: false },
   {
     title: "COLOR GRADING",

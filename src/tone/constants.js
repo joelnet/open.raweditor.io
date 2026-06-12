@@ -43,6 +43,60 @@ export const GRADE = {
 };
 
 /**
+ * Presence (texture / clarity / dehaze): the spatial adjustments. The
+ * algorithms follow the open-source consensus — texture is à trous (B3
+ * spline) wavelet band amplification (darktable's contrast equalizer, ART's
+ * texture boost), clarity is wide-radius local contrast with darktable's
+ * local-laplacian midtone transfer `d·exp(-d²·k)` (the halo killer), and
+ * dehaze is the dark channel prior (He et al. 2009) with a guided-filter
+ * refined transmission map (darktable hazeremoval, RawTherapee ipdehaze).
+ * Texture/clarity work on gamma-encoded luminance and re-apply as a
+ * ratio on linear RGB (vkdt-style, hue-preserving); dehaze works on
+ * linear RGB where the haze model holds.
+ */
+export const SPATIAL = {
+  /** Gamma for the luminance working space of texture/clarity. */
+  GAMMA: 2.4,
+  /** Cap on the linear-light gain texture/clarity may apply (vkdt). */
+  RATIO_MAX: 4,
+  /** à trous levels: bands 0-2 drive texture, the level-6 residual is the
+   *  clarity base (σ ≈ 37 px at preview scale ≈ RT's local contrast). */
+  DETAIL_LEVELS: 6,
+  /** Number of fine bands the texture slider amplifies. */
+  TEXTURE_BANDS: 3,
+  /** Texture slider ±1 band gain. */
+  TEXTURE_GAIN: 1.5,
+  /** Per-band weights: soften the finest band (noise), peak mid (Adobe). */
+  TEXTURE_WEIGHTS: [0.5, 1.0, 0.75],
+  /** Per-band noise floor (gamma units): boosts only |d| above this. */
+  TEXTURE_THRESH: [0.004, 0.002, 0],
+  /** Negative texture never attenuates a band below this gain. */
+  TEXTURE_MIN_GAIN: 0.2,
+  /** Clarity slider ±1 gain on the base-band detail. */
+  CLARITY_GAIN: 1.5,
+  /** Rolloff k in d·exp(-k·d²): large edges get exponentially less boost
+   *  (darktable local laplacian clarity term, σ = 0.5 → k = 6). */
+  CLARITY_ROLLOFF: 6,
+  /** Haze suppression at slider 1 (the paper's classic ω; < 1 on purpose
+   *  so skies keep residual haze). Negative slider re-adds haze. */
+  DEHAZE_OMEGA: 0.9,
+  /** Transmission floor: caps the 1/t gain so noise can't explode. */
+  DEHAZE_T_MIN: 0.05,
+  /** Long edge of the downscaled image the dehaze analysis runs on (RT
+   *  proves ~200 px suffices; estimation only, the apply is full-res). */
+  DEHAZE_MAX_EDGE: 288,
+  /** Dark-channel patch min radius, on the analysis grid. */
+  DEHAZE_PATCH_RADIUS: 3,
+  /** Guided-filter box radius for transmission refinement (≈ 4× patch). */
+  DEHAZE_GF_RADIUS: 12,
+  /** Guided-filter edge epsilon (on [0,1] luminance). */
+  DEHAZE_GF_EPS: 1e-4,
+  /** Airlight: average the brightest AIR_QUANTILE of the haziest
+   *  AIR_QUANTILE of pixels by dark channel (darktable's 95/95). */
+  DEHAZE_AIR_QUANTILE: 0.95,
+};
+
+/**
  * Local adjustment masks (Lightroom-style linear/radial gradients). Mask
  * shapes follow darktable: the linear gradient is a smoothstep ramp across
  * a rotated line (masks/gradient.c's sigmoidal falloff), the radial is a

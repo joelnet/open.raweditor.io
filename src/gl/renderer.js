@@ -23,6 +23,9 @@ const UNIFORMS = /** @type {const} */ ([
   "shadows",
   "whites",
   "blacks",
+  "texture",
+  "clarity",
+  "dehaze",
   "vibrance",
   "saturation",
   "gradeShadowHue",
@@ -61,8 +64,18 @@ function compileShader(gl, type, source) {
  */
 
 /**
+ * Per-image presence aux from spatial-worker.js: interleaved à trous
+ * detail planes (c1, c2, c3, clarity base), the refined haze amount, and
+ * the estimated airlight color.
+ * @typedef {{ detail: Float32Array, dehazeD: Float32Array,
+ *             airlight: [number, number, number],
+ *             width: number, height: number }} PresenceAux
+ */
+
+/**
  * @typedef {{
  *   setImage(img: { pixels: Uint16Array, width: number, height: number }): void,
+ *   setAux(aux: PresenceAux | null): void,
  *   setSize(width: number, height: number): void,
  *   render(settings: import("../tone/tone-math.js").ToneSettings, view?: ViewRect, opts?: { maskOverlay?: number, geometry?: import("../tone/geometry.js").Geometry }): void,
  *   computeHistogram(settings: import("../tone/tone-math.js").ToneSettings, view?: ViewRect, geometry?: import("../tone/geometry.js").Geometry): HistogramBins | null,
@@ -116,7 +129,13 @@ export function createRenderer(canvas) {
   const locMaskAdjB = gl.getUniformLocation(program, "u_maskAdjB");
   const locMaskAdjC = gl.getUniformLocation(program, "u_maskAdjC");
   const locMaskOverlay = gl.getUniformLocation(program, "u_maskOverlay");
+  const locHasAux = gl.getUniformLocation(program, "u_hasAux");
+  const locAirlight = gl.getUniformLocation(program, "u_airlight");
   gl.uniform1i(gl.getUniformLocation(program, "u_image"), 0);
+  // unit 1 is the histogram readback target; presence aux lives on 2 and 3
+  gl.uniform1i(gl.getUniformLocation(program, "u_detail"), 2);
+  gl.uniform1i(gl.getUniformLocation(program, "u_dehazeD"), 3);
+  gl.uniform1i(locHasAux, 0);
 
   // Packed mask uniform staging, reused across draws.
   const maskGeo = new Float32Array(MASK.MAX * 4);
@@ -188,14 +207,22 @@ export function createRenderer(canvas) {
     gl.uniform1i(locMaskOverlay, maskOverlay < count ? maskOverlay : -1);
   };
 
-  const texture = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
+  /** @param {number} unit */
+  const createNearestTexture = (unit) => {
+    gl.activeTexture(unit);
+    gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  };
+
+  // Presence aux textures (image-res, sampled at the same texel as
+  // u_image). Bound once; texImage2D in setAux re-allocates per image.
+  createNearestTexture(gl.TEXTURE2);
+  createNearestTexture(gl.TEXTURE3);
   // Integer textures are non-filterable: NEAREST is mandatory.
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  createNearestTexture(gl.TEXTURE0);
 
   let hasImage = false;
 
@@ -235,6 +262,53 @@ export function createRenderer(canvas) {
       imgW = width;
       imgH = height;
       hasImage = true;
+      // stale aux belongs to the previous image — gate it off until the
+      // spatial worker delivers this image's planes
+      gl.uniform1i(locHasAux, 0);
+    },
+
+    /**
+     * Upload (or clear, with null) the presence aux planes. Must match the
+     * current image's dimensions.
+     * @param {PresenceAux | null} aux
+     */
+    setAux(aux) {
+      if (!aux) {
+        gl.uniform1i(locHasAux, 0);
+        return;
+      }
+      gl.activeTexture(gl.TEXTURE2);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA16F,
+        aux.width,
+        aux.height,
+        0,
+        gl.RGBA,
+        gl.FLOAT,
+        aux.detail,
+      );
+      gl.activeTexture(gl.TEXTURE3);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.R16F,
+        aux.width,
+        aux.height,
+        0,
+        gl.RED,
+        gl.FLOAT,
+        aux.dehazeD,
+      );
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform3f(
+        locAirlight,
+        aux.airlight[0],
+        aux.airlight[1],
+        aux.airlight[2],
+      );
+      gl.uniform1i(locHasAux, 1);
     },
 
     /**

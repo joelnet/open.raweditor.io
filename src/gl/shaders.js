@@ -1,11 +1,21 @@
 // GLSL for the preview path. The fragment shader mirrors tone-math.js
-// step-for-step (white balance → exposure → whites/blacks → contrast →
-// highlights/shadows → local masks → vibrance/saturation → color grading →
-// sRGB encode); constants are interpolated from tone/constants.js so the
-// GPU preview and the CPU export can never drift apart. The red mask
-// overlay is the one preview-only extra (it never affects an export).
+// step-for-step (presence → white balance → exposure → whites/blacks →
+// contrast → highlights/shadows → local masks → vibrance/saturation →
+// color grading → sRGB encode); constants are interpolated from
+// tone/constants.js so the GPU preview and the CPU export can never drift
+// apart. Presence (texture/clarity/dehaze) reads per-image aux textures
+// from spatial-worker.js and mirrors spatial.js, which the export applies
+// as a pre-pass instead. The red mask overlay is the one preview-only
+// extra (it never affects an export).
 
-import { TONE, GRADE, MASK, INPUT_TRANSFER, LUMA } from "../tone/constants.js";
+import {
+  TONE,
+  GRADE,
+  SPATIAL,
+  MASK,
+  INPUT_TRANSFER,
+  LUMA,
+} from "../tone/constants.js";
 
 /** @param {number} n */
 const f = (n) => n.toFixed(6);
@@ -52,6 +62,9 @@ uniform float u_highlights;     // [-1, 1]
 uniform float u_shadows;        // [-1, 1]
 uniform float u_whites;         // [-1, 1]
 uniform float u_blacks;         // [-1, 1]
+uniform float u_texture;        // [-1, 1]
+uniform float u_clarity;        // [-1, 1]
+uniform float u_dehaze;         // [-1, 1]
 uniform float u_vibrance;       // [-1, 1]
 uniform float u_saturation;     // [-1, 1]
 uniform float u_gradeShadowHue; // turns [0, 1)
@@ -65,6 +78,14 @@ uniform float u_gradeHighSat;   // [0, 1]
 uniform float u_gradeHighLum;   // [-1, 1]
 uniform float u_gradeBlending;  // [0, 1]
 uniform float u_gradeBalance;   // [-1, 1]
+
+// Presence aux, computed per image by spatial-worker.js (slider moves stay
+// single-pass): à trous detail planes of the source gamma-luma and the
+// guided-filter-refined haze amount. u_hasAux gates until they're ready.
+uniform int u_hasAux;
+uniform sampler2D u_detail;     // c1, c2, c3, base (clarity residual)
+uniform sampler2D u_dehazeD;    // refined dark channel [0, 1]
+uniform vec3 u_airlight;
 
 // Geometry: orientation (quarter-turns CW) + straighten rotation. v_uv is
 // frame UV (the oriented image); frameToSourceUv mirrors frameToSource()
@@ -108,6 +129,17 @@ vec3 hueColor(float h) {
 // pegtop soft light: identity at blend 0.5, pins black and white
 vec3 softLight(vec3 a, vec3 b) {
   return (1.0 - 2.0 * b) * a * a + 2.0 * b * a;
+}
+
+// One à trous band's texture boost — mirrors textureDelta() in spatial.js.
+// Positive: amplify what exceeds the band's noise floor; negative:
+// attenuate the band, floored so edges never fully dissolve.
+float textureDelta(float d, float w, float tau) {
+  if (u_texture >= 0.0) {
+    return u_texture * ${f(SPATIAL.TEXTURE_GAIN)} * w
+      * sign(d) * max(abs(d) - tau, 0.0);
+  }
+  return (max(1.0 + u_texture * w, ${f(SPATIAL.TEXTURE_MIN_GAIN)}) - 1.0) * d;
 }
 
 // Mask weight at one pixel — mirrors maskWeight() in mask-math.js.
@@ -216,6 +248,44 @@ void main() {
   vec2 suv = frameToSourceUv(v_uv);
   ivec2 p = clamp(ivec2(suv * vec2(ts)), ivec2(0), ts - 1);
   vec3 rgb = decodeInput(vec3(texelFetch(u_image, p, 0).rgb) / 65535.0);
+
+  // 0. presence: dehaze (linear RGB, where the haze model holds), then
+  // texture/clarity (gamma-luma delta applied as a hue-preserving linear
+  // ratio) — mirrors applyPresencePrepass() in spatial.js: same formulas,
+  // same position (source-referred, before white balance).
+  if (u_hasAux == 1) {
+    float ySrc = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
+    if (u_dehaze != 0.0) {
+      float D = texelFetch(u_dehazeD, p, 0).r;
+      float t = max(1.0 - ${f(SPATIAL.DEHAZE_OMEGA)} * u_dehaze * D,
+        ${f(SPATIAL.DEHAZE_T_MIN)});
+      rgb = max((rgb - u_airlight) / t + u_airlight, 0.0);
+    }
+    if (u_texture != 0.0 || u_clarity != 0.0) {
+      float y0 = pow(max(ySrc, 0.0), 1.0 / ${f(SPATIAL.GAMMA)});
+      vec4 c = texelFetch(u_detail, p, 0);
+      float delta = 0.0;
+      if (u_texture != 0.0) {
+        delta += textureDelta(y0 - c.x,
+          ${f(SPATIAL.TEXTURE_WEIGHTS[0])}, ${f(SPATIAL.TEXTURE_THRESH[0])});
+        delta += textureDelta(c.x - c.y,
+          ${f(SPATIAL.TEXTURE_WEIGHTS[1])}, ${f(SPATIAL.TEXTURE_THRESH[1])});
+        delta += textureDelta(c.y - c.z,
+          ${f(SPATIAL.TEXTURE_WEIGHTS[2])}, ${f(SPATIAL.TEXTURE_THRESH[2])});
+      }
+      if (u_clarity != 0.0) {
+        // clarityDelta(): exp rolloff starves large edges (halos), the
+        // midtone parabola keeps the endpoints from clipping
+        float d = y0 - c.w;
+        float mid = clamp(4.0 * y0 * (1.0 - y0), 0.0, 1.0);
+        delta += u_clarity * ${f(SPATIAL.CLARITY_GAIN)} * mid * d
+          * exp(-${f(SPATIAL.CLARITY_ROLLOFF)} * d * d);
+      }
+      float yNew = max(y0 + delta, 0.0);
+      rgb *= clamp(pow(yNew, ${f(SPATIAL.GAMMA)}) / max(ySrc, 1e-5),
+        0.0, ${f(SPATIAL.RATIO_MAX)});
+    }
+  }
 
   // 1. white balance: +temp warms (red up, blue down), +tint goes magenta
   rgb *= exp2(vec3(

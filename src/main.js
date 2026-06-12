@@ -5,6 +5,7 @@ import { createStore } from "./state.js";
 import { ZERO_SETTINGS, cropPixelRect } from "./tone/tone-math.js";
 import { orientedDims, frameRectToSource } from "./tone/geometry.js";
 import { autoWhiteBalance, autoTone } from "./tone/auto.js";
+import { createSpatialAnalyzer } from "./tone/spatial-client.js";
 import { buildPanel } from "./ui/panel.js";
 import { initHistogram } from "./ui/histogram.js";
 import { initCrop } from "./ui/crop.js";
@@ -33,6 +34,9 @@ const status = createStatus();
 const store = createStore();
 const decoder = new Decoder();
 const exporter = createExporter();
+const spatial = createSpatialAnalyzer();
+/** Guards stale presence-analysis results against newer opens. */
+let spatialToken = 0;
 
 const renderer = createRenderer(canvas);
 
@@ -127,6 +131,17 @@ async function openFile(file) {
     });
     const preview = boxDownscaleToRgba16(image);
     renderer.setImage(preview);
+    // Presence (texture/clarity/dehaze) aux planes compute off-thread;
+    // the sliders take effect as soon as they land.
+    const token = ++spatialToken;
+    spatial
+      .analyze(preview)
+      .then((aux) => {
+        if (token !== spatialToken || !renderer) return;
+        renderer.setAux(aux);
+        queueRender();
+      })
+      .catch((err) => console.error("presence analysis failed:", err));
     previewImage = preview;
     previewSize = { width: preview.width, height: preview.height };
     currentFile = file;
@@ -192,6 +207,7 @@ async function onExport(format) {
       format,
       cropRect,
       geometry,
+      previewSize?.width ?? 0,
       (done, total) => {
         status.setProgress(
           `Export: applying tone… ${Math.round((done / total) * 100)}%`,

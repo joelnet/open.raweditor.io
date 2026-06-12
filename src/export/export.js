@@ -16,10 +16,21 @@ export function createExporter() {
      * @param {"png" | "jpeg" | "tiff"} format
      * @param {import("../tone/tone-math.js").CropRect | null} crop
      * @param {import("../tone/geometry.js").Geometry} geometry
+     * @param {number} previewWidth source-oriented preview width, so the
+     *   presence pre-pass lands on the same frequency bands the preview
+     *   showed (0 = unknown, treat full res as scale 1)
      * @param {(done: number, total: number) => void} [onProgress]
      * @returns {Promise<Blob>}
      */
-    exportImage(image, settings, format, crop, geometry, onProgress) {
+    exportImage(
+      image,
+      settings,
+      format,
+      crop,
+      geometry,
+      previewWidth,
+      onProgress,
+    ) {
       if (!worker) {
         worker = new Worker(new URL("./worker.js", import.meta.url), {
           type: "module",
@@ -36,9 +47,10 @@ export function createExporter() {
         };
         w.onerror = (e) =>
           reject(new Error(e.message || "export worker error"));
-        w.postMessage({ image, settings, format, crop, geometry }, [
-          image.data.buffer,
-        ]);
+        w.postMessage(
+          { image, settings, format, crop, geometry, previewWidth },
+          [image.data.buffer],
+        );
       });
     },
   };
