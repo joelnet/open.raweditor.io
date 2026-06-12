@@ -429,6 +429,28 @@ test("toneMapRows matches applyTonePixel and fills alpha (3-channel u16)", () =>
   }
 });
 
+test("toneMapRows writes 16-bit output into a Uint16Array", () => {
+  const width = 2;
+  const height = 2;
+  const data = new Uint16Array([
+    0, 0, 0, 65535, 65535, 65535, 11796, 23593, 35389, 6553, 6553, 6553,
+  ]);
+  const image = { data, width, height, colors: 3, bits: 16 };
+  const s = settings({ vibrance: 0.5, saturation: -0.3 });
+  const out = new Uint16Array(width * height * 4);
+  toneMapRows(image, s, out, 0, height);
+  for (let p = 0; p < 4; p++) {
+    const r = data[p * 3] / 65535;
+    const g = data[p * 3 + 1] / 65535;
+    const b = data[p * 3 + 2] / 65535;
+    const [er, eg, eb] = applyTonePixel(r, g, b, s);
+    assert.equal(out[p * 4], Math.round(er * 65535));
+    assert.equal(out[p * 4 + 1], Math.round(eg * 65535));
+    assert.equal(out[p * 4 + 2], Math.round(eb * 65535));
+    assert.equal(out[p * 4 + 3], 65535);
+  }
+});
+
 test("toneMapRows handles 4-channel input and row ranges", () => {
   const width = 2;
   const height = 2;

@@ -2,9 +2,9 @@
 
 A RAW photo editor that runs entirely in the browser. Drop a Sony `.ARW`,
 Fujifilm `.RAF`, or `.DNG` file, adjust it with Lightroom-style sliders on a
-live WebGL preview, and export a full-resolution PNG/JPG or the original DNG
-source file. Files never leave your machine — decoding, editing, and export all
-happen client-side.
+live WebGL preview, and export a full-resolution PNG, JPG, or 16-bit TIFF.
+Files never leave your machine — decoding, editing, and export all happen
+client-side.
 
 ## Features
 
@@ -20,9 +20,8 @@ happen client-side.
   across sessions; **zoom / pan** with pinch support
 - **Histogram** (RGB, GPU-computed) and a shot-settings EXIF line
 - **Per-section eye toggles** for instant before/after comparison
-- **Export** full-resolution PNG/JPG — the CPU path in a worker applies the
-  exact same math as the preview shader; source `.DNG` files can also be
-  exported as the original raw DNG
+- **Export** full-resolution PNG, JPG, or uncompressed 16-bit TIFF — the CPU
+  path in a worker applies the exact same math as the preview shader
 - Responsive layout with a draggable split on touch devices
 
 ## Architecture

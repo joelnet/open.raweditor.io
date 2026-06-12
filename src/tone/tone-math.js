@@ -395,7 +395,7 @@ export function cropPixelRect(crop, width, height) {
 }
 
 /**
- * Tone-map a row range of a decoded LibRaw image into an RGBA8 buffer,
+ * Tone-map a row range of a decoded LibRaw image into an RGBA buffer,
  * optionally windowed to a pixel crop rect. `out` is rect-sized
  * (rect.w × rect.h × 4) and rowStart/rowEnd index rows of the rect, not
  * the source image. Lets the caller (export worker) chunk work and report
@@ -405,7 +405,8 @@ export function cropPixelRect(crop, width, height) {
  * @param {{ data: Uint16Array | Uint8Array, width: number, height: number,
  *           colors: number, bits: number }} image
  * @param {ToneSettings} settings
- * @param {Uint8ClampedArray} out RGBA8, rect.w*rect.h*4 bytes
+ * @param {Uint8ClampedArray | Uint16Array} out RGBA samples,
+ *   rect.w*rect.h*4 long — 8-bit or 16-bit sRGB-encoded per the array type
  * @param {number} rowStart inclusive, in rect rows
  * @param {number} rowEnd exclusive, in rect rows
  * @param {{ x: number, y: number, w: number, h: number }} [rect] pixel
@@ -428,6 +429,10 @@ export function toneMapRows(
   const ry = rect ? rect.y : 0;
   const rw = rect ? rect.w : frame.width;
   const maxVal = bits === 16 ? 65535 : 255;
+  // Uint8ClampedArray rounds on assignment; Uint16Array truncates, so the
+  // 16-bit path adds 0.5 to round (applyTonePixel output is clamped [0,1]).
+  const outMax = out instanceof Uint16Array ? 65535 : 255;
+  const outBias = out instanceof Uint16Array ? 0.5 : 0;
   // Mask geometry is normalized to the full frame, so weights are computed
   // from uncropped frame coordinates (mirrors the shader, which evaluates
   // masks at v_uv against u_frame).
@@ -514,11 +519,10 @@ export function toneMapRows(
         }
       }
       const [or, og, ob] = applyTonePixel(r, g, b, settings, weights);
-      // Uint8ClampedArray assignment rounds to nearest on its own.
-      out[dst] = or * 255;
-      out[dst + 1] = og * 255;
-      out[dst + 2] = ob * 255;
-      out[dst + 3] = 255;
+      out[dst] = or * outMax + outBias;
+      out[dst + 1] = og * outMax + outBias;
+      out[dst + 2] = ob * outMax + outBias;
+      out[dst + 3] = outMax;
       src += colors;
       dst += 4;
     }

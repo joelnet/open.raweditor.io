@@ -13,7 +13,7 @@ export function createExporter() {
      * @param {{ data: Uint16Array | Uint8Array, width: number, height: number,
      *           colors: number, bits: number }} image
      * @param {import("../tone/tone-math.js").ToneSettings} settings
-     * @param {"png" | "jpeg"} format
+     * @param {"png" | "jpeg" | "tiff"} format
      * @param {import("../tone/tone-math.js").CropRect | null} crop
      * @param {import("../tone/geometry.js").Geometry} geometry
      * @param {(done: number, total: number) => void} [onProgress]
