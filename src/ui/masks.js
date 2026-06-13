@@ -8,6 +8,9 @@ import { MASK } from "../tone/constants.js";
 import {
   createLinearMask,
   createRadialMask,
+  createBrushMask,
+  brushCoverageDims,
+  stampBrush,
   effectiveMasks,
 } from "../tone/mask-math.js";
 import { EYE_OPEN, EYE_CLOSED } from "./panel.js";
@@ -16,6 +19,10 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const ROTATE_ARM = 26; // display px between shape and rotate handle
 const MIN_RANGE = 0.005; // linear falloff half-width floor (diagonal frac)
 const MIN_RADIUS = 0.02; // radial semi-axis floor (min-dimension frac)
+// Brush control ranges. Size is a fraction of the frame's longest edge,
+// the same unit stampBrush() / MASK.BRUSH_RADIUS use.
+const BRUSH_SIZE_MIN = 0.01;
+const BRUSH_SIZE_MAX = 0.4;
 
 /**
  * Sliders for the selected mask's adjustments — same scales as the global
@@ -161,9 +168,38 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   let dispW = 0; // canvas CSS box, cached by reposition()
   let dispH = 0;
 
+  // Brush tool state (the active drawing settings, not per-mask): radius as
+  // a fraction of the longest frame edge, hardness/flow in [0, 1], plus the
+  // add/erase toggle and whether paint mode is armed. One shared brush, like
+  // Lightroom's brush tool.
+  let paintMode = false;
+  let brushSize = MASK.BRUSH_RADIUS;
+  let brushHardness = MASK.BRUSH_HARDNESS;
+  let brushFlow = MASK.BRUSH_FLOW;
+  let brushErase = false;
+
   /** @param {readonly import("../tone/mask-math.js").Mask[]} next */
   function commit(next) {
     store.set({ masks: next });
+  }
+
+  /**
+   * Coverage of a brush mask was painted in place: bump its version and
+   * commit a shallow-copied mask so the store notifies (renderer re-uploads
+   * the one changed layer, export sees the live raster). The Uint8Array
+   * reference is kept stable — we mutate it, never reallocate per stroke, so
+   * a drag stays allocation-free (side-buffer-style efficiency while the
+   * raster still lives on the store mask for free structured-clone export).
+   * @param {number} index
+   */
+  function commitCoverage(index) {
+    commit(
+      masks.map((m, i) =>
+        i === index
+          ? { ...m, coverageVersion: (m.coverageVersion ?? 0) + 1 }
+          : m,
+      ),
+    );
   }
 
   /** @param {Partial<import("../tone/mask-math.js").Mask>} patch */
@@ -199,29 +235,45 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   const addRadialBtn = /** @type {HTMLButtonElement} */ (
     el("button", "", "+ Radial")
   );
+  const addBrushBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "+ Brush")
+  );
   addLinearBtn.type = "button";
   addRadialBtn.type = "button";
-  addRow.append(addLinearBtn, addRadialBtn);
+  addBrushBtn.type = "button";
+  addRow.append(addLinearBtn, addRadialBtn, addBrushBtn);
 
   const list = el("div", "mask-list");
   const detail = el("div", "mask-detail");
   section.append(header, addRow, list, detail);
   panelContainer.append(section);
 
-  /** @param {"linear" | "radial"} type */
+  /** @param {"linear" | "radial" | "brush"} type */
   function addMask(type) {
     if (!enabled || masks.length >= MASK.MAX) return;
     // create at the center of the current view so it's visible when zoomed
     const v = handlers.getView();
     const cx = v.x + v.w / 2;
     const cy = v.y + v.h / 2;
-    const mask =
-      type === "linear" ? createLinearMask(cx, cy) : createRadialMask(cx, cy);
+    /** @type {import("../tone/mask-math.js").Mask} */
+    let mask;
+    if (type === "brush") {
+      const dims = brushCoverageDims(imgW, imgH);
+      mask = createBrushMask(dims.w, dims.h);
+      // creating a brush arms paint mode (Lightroom drops you straight into
+      // the brush) — no analytic geometry to drag
+      paintMode = true;
+    } else {
+      mask =
+        type === "linear" ? createLinearMask(cx, cy) : createRadialMask(cx, cy);
+      paintMode = false;
+    }
     selected = masks.length;
     commit([...masks, mask]);
   }
   addLinearBtn.addEventListener("click", () => addMask("linear"));
   addRadialBtn.addEventListener("click", () => addMask("radial"));
+  addBrushBtn.addEventListener("click", () => addMask("brush"));
 
   // --- selected-mask detail: tools + feather + adjustment sliders ---
 
@@ -310,7 +362,117 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     (raw) => patchSelected({ feather: raw * 0.01 }),
     MASK.RADIAL_FEATHER * 100,
   );
-  detail.append(tools, featherRow);
+
+  // --- brush tool controls (only shown for brush masks) ---
+
+  /**
+   * A non-store-bound tool slider (the brush settings are tool state, not
+   * per-mask): label + value readout + range input, value as a percentage.
+   * @param {string} label
+   * @param {number} min @param {number} max
+   * @param {() => number} read 0–100 raw value
+   * @param {(raw: number) => void} write
+   */
+  function makeToolRow(label, min, max, read, write) {
+    const row = el("div", "slider-row");
+    const lab = el("span", "slider-label", label);
+    const value = el("span", "slider-value", "0");
+    const input = /** @type {HTMLInputElement} */ (el("input"));
+    input.type = "range";
+    input.min = String(min);
+    input.max = String(max);
+    input.step = "1";
+    input.setAttribute("aria-label", `brush ${label.toLowerCase()}`);
+    const sync = () => {
+      const v = Math.round(read());
+      input.value = String(v);
+      value.textContent = String(v);
+    };
+    input.addEventListener("input", () => {
+      write(input.valueAsNumber);
+      value.textContent = String(Math.round(input.valueAsNumber));
+    });
+    row.append(lab, value, input);
+    return { row, sync };
+  }
+
+  const brushTools = el("div", "brush-tools");
+  const paintBtn = /** @type {HTMLButtonElement} */ (el("button", "", "Paint"));
+  const addEraseBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Erase")
+  );
+  const clearBtn = /** @type {HTMLButtonElement} */ (el("button", "", "Clear"));
+  paintBtn.type = "button";
+  addEraseBtn.type = "button";
+  clearBtn.type = "button";
+  paintBtn.setAttribute("aria-pressed", "false");
+  addEraseBtn.setAttribute("aria-pressed", "false");
+  paintBtn.addEventListener("click", () => {
+    paintMode = !paintMode;
+    syncBrushUi();
+    drawOverlay();
+    handlers.onUiChange();
+  });
+  addEraseBtn.addEventListener("click", () => {
+    brushErase = !brushErase;
+    syncBrushUi();
+  });
+  clearBtn.addEventListener("click", () => {
+    const m = masks[selected];
+    if (!m || m.type !== "brush" || !m.coverage) return;
+    m.coverage.fill(0);
+    commitCoverage(selected);
+  });
+  brushTools.append(paintBtn, addEraseBtn, clearBtn);
+
+  // Size in percent of the longest frame edge; map to the [MIN, MAX] frac.
+  const sizeRow = makeToolRow(
+    "SIZE",
+    Math.round(BRUSH_SIZE_MIN * 100),
+    Math.round(BRUSH_SIZE_MAX * 100),
+    () => brushSize * 100,
+    (raw) => (brushSize = raw / 100),
+  );
+  const hardnessRow = makeToolRow(
+    "HARDNESS",
+    0,
+    100,
+    () => brushHardness * 100,
+    (raw) => (brushHardness = raw / 100),
+  );
+  const flowRow = makeToolRow(
+    "FLOW",
+    1,
+    100,
+    () => brushFlow * 100,
+    (raw) => (brushFlow = raw / 100),
+  );
+  const brushControls = el("div", "brush-controls");
+  brushControls.append(brushTools, sizeRow.row, hardnessRow.row, flowRow.row);
+
+  function syncBrushUi() {
+    const m = masks[selected];
+    const isBrush = !!m && m.type === "brush";
+    brushControls.hidden = !isBrush;
+    if (!isBrush) {
+      paintMode = false;
+      return;
+    }
+    const off = !enabled || bypassed;
+    paintBtn.disabled = off;
+    addEraseBtn.disabled = off;
+    clearBtn.disabled = off;
+    paintBtn.classList.toggle("active", paintMode);
+    paintBtn.setAttribute("aria-pressed", String(paintMode));
+    addEraseBtn.classList.toggle("active", brushErase);
+    addEraseBtn.setAttribute("aria-pressed", String(brushErase));
+    addEraseBtn.textContent = brushErase ? "Erase" : "Add";
+    sizeRow.sync();
+    hardnessRow.sync();
+    flowRow.sync();
+  }
+
+  detail.append(tools, brushControls, featherRow);
   for (const def of ADJ_SLIDERS) {
     detail.append(
       makeRow(
@@ -338,6 +500,15 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   overlay.append(svg);
   viewport.append(overlay);
 
+  // Painting surface: a transparent capture layer tracking the canvas box
+  // exactly like #mask-overlay, live only while a brush mask is selected and
+  // paint mode is armed. Separate from the SVG overlay (which is mostly
+  // pointer-transparent) so the whole frame grabs strokes.
+  const paint = el("div", "");
+  paint.id = "paint-overlay";
+  paint.hidden = true;
+  viewport.append(paint);
+
   const view = () => handlers.getView();
   /** display px per image px (layout keeps x/y scale uniform) */
   const dispScale = () => (imgW > 0 ? dispW / (view().w * imgW) : 0);
@@ -352,11 +523,30 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     return [vw.x + (x / dispW) * vw.w, vw.y + (y / dispH) * vw.h];
   }
 
-  function overlayVisible() {
+  /** Selected-mask context is active (any mask type). */
+  function selectionActive() {
     return enabled && !cropActive && selected >= 0 && selected < masks.length;
   }
 
+  /** The SVG geometry overlay shows for linear/radial only (brush has no
+   * parametric handles — it's painted on the canvas). */
+  function overlayVisible() {
+    const m = masks[selected];
+    return selectionActive() && !!m && m.type !== "brush";
+  }
+
+  /** The transparent paint surface is live for a selected brush mask in
+   * paint mode. */
+  function paintActive() {
+    const m = masks[selected];
+    return (
+      selectionActive() && !!m && m.type === "brush" && paintMode && !bypassed
+    );
+  }
+
   function drawOverlay() {
+    // brush masks use the paint surface; the analytic SVG overlay is hidden
+    paint.hidden = !paintActive();
     const visible = overlayVisible();
     overlay.hidden = !visible;
     svg.textContent = "";
@@ -470,6 +660,11 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     svg.setAttribute("width", String(dispW));
     svg.setAttribute("height", String(dispH));
     svg.setAttribute("viewBox", `0 0 ${dispW} ${dispH}`);
+    // the paint surface tracks the same box
+    paint.style.left = `${canvas.offsetLeft}px`;
+    paint.style.top = `${canvas.offsetTop}px`;
+    paint.style.width = `${dispW}px`;
+    paint.style.height = `${dispH}px`;
     drawOverlay();
   }
 
@@ -554,18 +749,128 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     window.removeEventListener("pointercancel", onDragEnd);
   }
 
+  // --- brush painting ---
+
+  /** Active stroke: pointer id, last UV stamped, and whether the coverage
+   * grew since the last frame commit. */
+  /** @type {{ id: number, lastU: number, lastV: number } | null} */
+  let stroke = null;
+  let strokeDirty = false; // coverage changed but not yet committed
+  let strokeRaf = 0;
+
+  /** @param {PointerEvent} e @returns {[number, number]} paint-local px */
+  function paintPoint(e) {
+    const r = paint.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  }
+
+  /** Stamp one dab at frame UV (u, v) into the selected brush coverage. */
+  function stampAt(/** @type {number} */ u, /** @type {number} */ v) {
+    const m = masks[selected];
+    if (!m || m.type !== "brush" || !m.coverage || !m.coverageW || !m.coverageH)
+      return;
+    stampBrush(
+      m.coverage,
+      m.coverageW,
+      m.coverageH,
+      u,
+      v,
+      brushSize,
+      brushHardness,
+      brushFlow,
+      brushErase,
+      imgH > 0 ? imgW / imgH : 1,
+    );
+    strokeDirty = true;
+  }
+
+  /** Coalesce coverage uploads to one per animation frame during a drag —
+   * the whole point of the version-counter scheme. */
+  function scheduleStrokeCommit() {
+    if (strokeRaf) return;
+    strokeRaf = requestAnimationFrame(() => {
+      strokeRaf = 0;
+      if (strokeDirty && selected >= 0) {
+        strokeDirty = false;
+        commitCoverage(selected);
+      }
+    });
+  }
+
+  paint.addEventListener("pointerdown", (e) => {
+    if (stroke || !paintActive()) return;
+    e.preventDefault();
+    paint.setPointerCapture(e.pointerId);
+    const [px, py] = paintPoint(e);
+    const [u, v] = dispToUv(px, py);
+    stroke = { id: e.pointerId, lastU: u, lastV: v };
+    stampAt(u, v);
+    scheduleStrokeCommit();
+  });
+
+  paint.addEventListener("pointermove", (e) => {
+    if (!stroke || e.pointerId !== stroke.id) return;
+    e.preventDefault();
+    const [px, py] = paintPoint(e);
+    const [u, v] = dispToUv(px, py);
+    // Interpolate from the last sample so a fast drag lays a continuous
+    // line, not gapped dabs. Step ≈ a quarter of the brush radius, measured
+    // in longest-frame-edge units (the unit brushSize uses): u spans the
+    // width, v the height, so scale the shorter axis by aspect.
+    const du = u - stroke.lastU;
+    const dv = v - stroke.lastV;
+    const aspect = imgH > 0 ? imgW / imgH : 1;
+    const distLong =
+      aspect >= 1
+        ? Math.hypot(du, dv / aspect) // wide: longest edge = width
+        : Math.hypot(du * aspect, dv); // tall: longest edge = height
+    const step = Math.max(brushSize * 0.25, 1e-4);
+    const n = Math.max(1, Math.ceil(distLong / step));
+    for (let i = 1; i <= n; i++) {
+      stampAt(stroke.lastU + (du * i) / n, stroke.lastV + (dv * i) / n);
+    }
+    stroke.lastU = u;
+    stroke.lastV = v;
+    scheduleStrokeCommit();
+  });
+
+  /** @param {PointerEvent} e */
+  function endStroke(e) {
+    if (!stroke || e.pointerId !== stroke.id) return;
+    if (paint.hasPointerCapture(e.pointerId))
+      paint.releasePointerCapture(e.pointerId);
+    stroke = null;
+    if (strokeRaf) {
+      cancelAnimationFrame(strokeRaf);
+      strokeRaf = 0;
+    }
+    // final commit so the last dabs land even if no frame fired
+    if (strokeDirty && selected >= 0) {
+      strokeDirty = false;
+      commitCoverage(selected);
+    }
+  }
+  paint.addEventListener("pointerup", endStroke);
+  paint.addEventListener("pointercancel", endStroke);
+
   // --- sidebar sync ---
 
   function syncUi() {
     addLinearBtn.disabled = !enabled || bypassed || masks.length >= MASK.MAX;
     addRadialBtn.disabled = addLinearBtn.disabled;
+    addBrushBtn.disabled = addLinearBtn.disabled;
 
     list.textContent = "";
     let linearN = 0;
     let radialN = 0;
+    let brushN = 0;
     masks.forEach((m, i) => {
       const name =
-        m.type === "linear" ? `LINEAR ${++linearN}` : `RADIAL ${++radialN}`;
+        m.type === "linear"
+          ? `LINEAR ${++linearN}`
+          : m.type === "radial"
+            ? `RADIAL ${++radialN}`
+            : `BRUSH ${++brushN}`;
       const item = el("div", "mask-item");
       item.classList.toggle("active", i === selected);
       const selectBtn = /** @type {HTMLButtonElement} */ (
@@ -608,6 +913,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     invertBtn.classList.toggle("active", sel.invert);
     invertBtn.setAttribute("aria-pressed", String(sel.invert));
     featherRow.hidden = sel.type !== "radial";
+    syncBrushUi();
     for (const r of sliderRows) {
       const scaled = r.read(sel);
       const raw = scaled / r.scale;
@@ -641,9 +947,10 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     effective(settings) {
       return effectiveMasks(settings, bypassed);
     },
-    /** Mask index the preview should tint red, or -1. */
+    /** Mask index the preview should tint red, or -1. The red overlay keys
+     * off maskWeight in the shader, so it works for brush masks too. */
     overlayIndex() {
-      return showMask && overlayVisible() ? selected : -1;
+      return showMask && selectionActive() ? selected : -1;
     },
     reposition,
     /** Frame dims changed (90° rotation) — masks keep their frame-UV
@@ -659,6 +966,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       imgH = previewH;
       selected = -1;
       showMask = false;
+      paintMode = false;
       showBtn.classList.remove("active");
       showBtn.setAttribute("aria-pressed", "false");
     },

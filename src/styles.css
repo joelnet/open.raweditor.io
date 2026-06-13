@@ -1219,3 +1219,38 @@ button:disabled {
   pointer-events: stroke;
   cursor: ew-resize;
 }
+
+/* ---- brush mask: tool controls + transparent painting surface ---- */
+
+.brush-controls[hidden] {
+  display: none;
+}
+
+.brush-tools {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px 2px;
+}
+
+.brush-tools button {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.brush-tools button.active:not(:disabled) {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+#paint-overlay {
+  position: absolute;
+  z-index: 3; /* above #mask-overlay so the whole frame grabs strokes */
+  pointer-events: all;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+#paint-overlay[hidden] {
+  display: none;
+}

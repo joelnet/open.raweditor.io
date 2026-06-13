@@ -143,6 +143,8 @@ export function createRenderer(canvas) {
   // unit 1 is the histogram readback target; presence aux lives on 2 and 3
   gl.uniform1i(gl.getUniformLocation(program, "u_detail"), 2);
   gl.uniform1i(gl.getUniformLocation(program, "u_dehazeD"), 3);
+  // brush-mask coverage array lives on unit 4
+  gl.uniform1i(gl.getUniformLocation(program, "u_brushMask"), 4);
   gl.uniform1i(locHasAux, 0);
 
   // Packed color-mixer band staging (hue, sat, lum per band), reused
@@ -155,6 +157,105 @@ export function createRenderer(canvas) {
   const maskAdjA = new Float32Array(MASK.MAX * 4);
   const maskAdjB = new Float32Array(MASK.MAX * 4);
   const maskAdjC = new Float32Array(MASK.MAX * 4);
+
+  // Brush (drawn) mask coverage lives in an R8 TEXTURE_2D_ARRAY on unit 4
+  // (one layer per mask slot), LINEAR filtered so the GPU's bilinear fetch
+  // matches sampleCoverage() in mask-math.js. The array is (re)allocated
+  // when the coverage grid dims change; individual layers re-upload only
+  // when their coverageVersion changes (so active painting touches one
+  // layer, not the whole array). Layer index = the mask's array index.
+  const brushTex = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, brushTex);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  // A 1×1×1 placeholder keeps the bound array texture *complete* so drivers
+  // never warn even on frames with no brush masks (the shader never samples
+  // it then, but the sampler is still bound on unit 4).
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage3D(
+    gl.TEXTURE_2D_ARRAY,
+    0,
+    gl.R8,
+    1,
+    1,
+    1,
+    0,
+    gl.RED,
+    gl.UNSIGNED_BYTE,
+    new Uint8Array(1),
+  );
+  gl.activeTexture(gl.TEXTURE0);
+  let brushW = 0; // allocated grid dims of the array (0 = unallocated)
+  let brushH = 0;
+  /** Last-uploaded coverageVersion per layer; -1 forces a (re)upload. */
+  const brushVersions = new Int32Array(MASK.MAX).fill(-1);
+
+  /**
+   * Ensure the coverage array is allocated at (w, h) and the given masks'
+   * brush layers are current. Cheap when nothing changed. Uploads use
+   * UNPACK_ALIGNMENT 1 since R8 rows aren't 4-byte aligned.
+   * @param {readonly import("../tone/mask-math.js").Mask[]} masks
+   */
+  const syncBrushMasks = (masks) => {
+    // Find the coverage grid dims from the first brush mask (all brush
+    // masks on one frame share dims — they're sized from the same frame).
+    let cw = 0;
+    let ch = 0;
+    for (const m of masks) {
+      if (m.type === "brush" && m.coverageW && m.coverageH) {
+        cw = m.coverageW;
+        ch = m.coverageH;
+        break;
+      }
+    }
+    if (cw === 0) return; // no brush masks → nothing to upload
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, brushTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    if (cw !== brushW || ch !== brushH) {
+      // (Re)allocate: MASK.MAX layers so any slot can hold a brush.
+      gl.texImage3D(
+        gl.TEXTURE_2D_ARRAY,
+        0,
+        gl.R8,
+        cw,
+        ch,
+        MASK.MAX,
+        0,
+        gl.RED,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
+      brushW = cw;
+      brushH = ch;
+      brushVersions.fill(-1); // every layer is now stale
+    }
+    const count = Math.min(masks.length, MASK.MAX);
+    for (let i = 0; i < count; i++) {
+      const m = masks[i];
+      const ver = m.type === "brush" ? (m.coverageVersion ?? 0) : -1;
+      if (m.type === "brush" && m.coverage && brushVersions[i] !== ver) {
+        gl.texSubImage3D(
+          gl.TEXTURE_2D_ARRAY,
+          0,
+          0,
+          0,
+          i,
+          cw,
+          ch,
+          1,
+          gl.RED,
+          gl.UNSIGNED_BYTE,
+          m.coverage,
+        );
+        brushVersions[i] = ver;
+      }
+    }
+    gl.activeTexture(gl.TEXTURE0);
+  };
 
   let imgW = 0;
   let imgH = 0;
@@ -197,13 +298,17 @@ export function createRenderer(canvas) {
       const a = mk.adjustments;
       const o = i * 4;
       const linear = mk.type === "linear";
+      const brush = mk.type === "brush";
       maskGeo[o] = mk.x;
       maskGeo[o + 1] = mk.y;
       maskGeo[o + 2] = mk.angle;
-      maskGeo[o + 3] = linear ? 0 : 1;
-      maskParam[o] = linear ? mk.range : mk.radiusX;
-      maskParam[o + 1] = linear ? 0 : mk.radiusY;
-      maskParam[o + 2] = linear ? 0 : mk.feather;
+      // type encoding: 0 linear, 1 radial, 2 brush
+      maskGeo[o + 3] = brush ? 2 : linear ? 0 : 1;
+      // brush slot carries the array layer index in param.y; the analytic
+      // params are unused for brushes
+      maskParam[o] = brush ? 0 : linear ? mk.range : mk.radiusX;
+      maskParam[o + 1] = brush ? i : linear ? 0 : mk.radiusY;
+      maskParam[o + 2] = brush || linear ? 0 : mk.feather;
       maskParam[o + 3] = mk.invert ? 1 : 0;
       maskAdjA[o] = a.temp;
       maskAdjA[o + 1] = a.tint;
@@ -225,6 +330,9 @@ export function createRenderer(canvas) {
     gl.uniform4fv(locMaskAdjB, maskAdjB);
     gl.uniform4fv(locMaskAdjC, maskAdjC);
     gl.uniform1i(locMaskOverlay, maskOverlay < count ? maskOverlay : -1);
+    // bring the brush coverage array up to date (uploads only changed
+    // layers; no-op when there are no brush masks)
+    syncBrushMasks(masks);
   };
 
   /** @param {number} unit */
