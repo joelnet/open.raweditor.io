@@ -700,6 +700,13 @@ button:disabled {
   padding: 7px 12px 4px;
 }
 
+/* .slider-row sets display:grid, which would otherwise beat the UA
+   [hidden] rule — restore hiding for rows toggled off (e.g. FEATHER on
+   non-radial masks). */
+.slider-row[hidden] {
+  display: none;
+}
+
 .slider-label {
   grid-area: label;
   color: var(--muted);
@@ -1253,4 +1260,31 @@ button:disabled {
 
 #paint-overlay[hidden] {
   display: none;
+}
+
+/* brush-size ring that follows the pointer (white = add, red = erase) */
+.brush-cursor {
+  position: absolute;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.4);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.brush-cursor[hidden] {
+  display: none;
+}
+
+.brush-cursor.erase {
+  border-color: var(--accent-red);
+}
+
+/* separator between a mask's shape/brush tools and its adjustment sliders */
+.mask-divider {
+  height: 0;
+  margin: 8px 12px 4px;
+  border-top: 1px solid var(--panel-edge);
 }
