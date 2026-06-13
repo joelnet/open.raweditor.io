@@ -53,6 +53,7 @@ const DECODE_INPUT_GLSL =
 export const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 precision highp usampler2D;
+precision highp sampler2DArray;
 
 uniform usampler2D u_image;     // RGBA16UI, linear light
 uniform float u_temp;           // [-1, 1]
@@ -99,12 +100,16 @@ uniform vec2 u_frame;           // frame size in px (oriented preview dims)
 
 // Local masks — geometry and adjustments mirror tone/mask-math.js.
 uniform int u_maskCount;
-uniform vec4 u_maskGeo[${MASK.MAX}];   // x, y (UV), angle (rad), type (0 linear, 1 radial)
-uniform vec4 u_maskParam[${MASK.MAX}]; // linear: range,-,-,invert | radial: rx, ry, feather, invert
+uniform vec4 u_maskGeo[${MASK.MAX}];   // x, y (UV), angle (rad), type (0 linear, 1 radial, 2 brush)
+uniform vec4 u_maskParam[${MASK.MAX}]; // linear: range,-,-,invert | radial: rx, ry, feather, invert | brush: -, layer, -, invert
 uniform vec4 u_maskAdjA[${MASK.MAX}];  // temp, tint, exposure, contrast
 uniform vec4 u_maskAdjB[${MASK.MAX}];  // highlights, shadows, whites, blacks
 uniform vec4 u_maskAdjC[${MASK.MAX}];  // vibrance, saturation, -, -
 uniform int u_maskOverlay;             // mask index to tint red, -1 = off
+// Brush (drawn) mask coverage: one R8 layer per brush-mask slot, LINEAR
+// filtered so the bilinear fetch matches sampleCoverage() in mask-math.js.
+// param.y of a brush mask selects the layer. Bound on texture unit 4.
+uniform highp sampler2DArray u_brushMask;
 
 in vec2 v_uv;
 out vec4 outColor;
@@ -160,9 +165,15 @@ float textureDelta(float d, float w, float tau) {
 // Computed in pixel space so radial masks stay true ellipses on
 // non-square images.
 float maskWeight(vec2 uv, vec2 size, vec4 geo, vec4 param) {
+  float m;
+  if (geo.w > 1.5) {
+    // brush: raster coverage, LINEAR-sampled at the pixel's frame UV —
+    // mirrors sampleCoverage() in mask-math.js. param.y holds the layer.
+    m = texture(u_brushMask, vec3(uv, param.y)).r;
+    return mix(m, 1.0 - m, param.w);
+  }
   vec2 d = uv * size - geo.xy * size;
   float ca = cos(geo.z), sa = sin(geo.z);
-  float m;
   if (geo.w < 0.5) {
     // linear: signed distance along the gradient direction,
     // diagonal-normalized, smoothstep ramp (≈ darktable's erf sigmoid)

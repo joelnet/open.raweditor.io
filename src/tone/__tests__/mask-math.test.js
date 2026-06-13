@@ -3,12 +3,16 @@ import assert from "node:assert/strict";
 import {
   createLinearMask,
   createRadialMask,
+  createBrushMask,
+  brushCoverageDims,
+  stampBrush,
   prepareMask,
   maskWeight,
   effectiveMasks,
   ZERO_MASK_ADJUSTMENTS,
 } from "../mask-math.js";
 import { ZERO_SETTINGS, applyTonePixel, srgbEncode } from "../tone-math.js";
+import { MASK } from "../constants.js";
 
 const W = 4000;
 const H = 3000;
@@ -149,6 +153,130 @@ test("radial: invert selects the outside", () => {
   const m = { ...createRadialMask(0.5, 0.5), invert: true };
   assert.equal(weightAt(m, 0.5, 0.5), 0);
   assert.equal(weightAt(m, 0, 0), 1);
+});
+
+// --- brush (drawn) mask: coverage raster, bilinear sampling ---
+
+/**
+ * Build a brush mask whose coverage is a known tiny grid (row-major, 0–255).
+ * @param {number[]} values @param {number} w @param {number} h
+ */
+function brushFromGrid(values, w, h) {
+  const m = createBrushMask(w, h);
+  m.coverage = Uint8Array.from(values);
+  return m;
+}
+
+test("brushCoverageDims: longest edge is BRUSH_RES, aspect preserved", () => {
+  const wide = brushCoverageDims(4000, 2000);
+  assert.equal(Math.max(wide.w, wide.h), MASK.BRUSH_RES);
+  assert.equal(wide.w, MASK.BRUSH_RES);
+  assert.equal(wide.h, MASK.BRUSH_RES / 2);
+  const tall = brushCoverageDims(3000, 4000);
+  assert.equal(Math.max(tall.w, tall.h), MASK.BRUSH_RES);
+  assert.equal(tall.h, MASK.BRUSH_RES);
+});
+
+test("brush: samples the grid value at texel centers", () => {
+  // 2×2 grid: top-left 255, rest 0. Texel centers are at UV 0.25 / 0.75.
+  const m = brushFromGrid([255, 0, 0, 0], 2, 2);
+  const p = prepareMask(m, 100, 100);
+  // dead-center of texel (0,0): full coverage
+  assert.ok(Math.abs(maskWeight(p, 25, 25) - 1) < 1e-9);
+  // dead-center of texel (1,1): zero
+  assert.ok(Math.abs(maskWeight(p, 75, 75) - 0) < 1e-9);
+});
+
+test("brush: bilinear interpolates between texels", () => {
+  // 2×1 grid: left 0, right 255 → midpoint (UV 0.5) is 0.5.
+  const m = brushFromGrid([0, 255], 2, 1);
+  const p = prepareMask(m, 100, 100);
+  const mid = maskWeight(p, 50, 50);
+  assert.ok(Math.abs(mid - 0.5) < 1e-9, `midpoint ${mid}`);
+  // quarter of the way (UV 0.375 between texel centers 0.25..0.75) → 0.25
+  const q = maskWeight(p, 37.5, 50);
+  assert.ok(Math.abs(q - 0.25) < 1e-9, `quarter ${q}`);
+});
+
+test("brush: clamps to edge outside the texel-center range", () => {
+  // a sample left of the first texel center stays at the first value
+  const m = brushFromGrid([0, 255], 2, 1);
+  const p = prepareMask(m, 100, 100);
+  assert.equal(maskWeight(p, 0, 50), 0); // UV 0, before center 0.25 → clamp 0
+  assert.equal(maskWeight(p, 100, 50), 1); // UV 1, past center 0.75 → clamp 255
+});
+
+test("brush: invert flips the coverage", () => {
+  const m = brushFromGrid([255, 0, 0, 0], 2, 2);
+  const inv = { ...m, invert: true };
+  const p = prepareMask(m, 100, 100);
+  const pi = prepareMask(inv, 100, 100);
+  for (const [px, py] of [
+    [25, 25],
+    [75, 75],
+    [50, 50],
+  ]) {
+    assert.ok(
+      Math.abs(maskWeight(p, px, py) + maskWeight(pi, px, py) - 1) < 1e-9,
+      `(${px}, ${py})`,
+    );
+  }
+});
+
+test("brush: coverage is resolution-independent (preview ↔ full-res)", () => {
+  // a 4×4 ramp grid sampled at the same UV must match at any frame size
+  const grid = [];
+  for (let y = 0; y < 4; y++)
+    for (let x = 0; x < 4; x++) grid.push(Math.round((x / 3) * 255));
+  const m = brushFromGrid(grid, 4, 4);
+  for (const [u, v] of [
+    [0.2, 0.3],
+    [0.5, 0.5],
+    [0.85, 0.65],
+  ]) {
+    const full = maskWeight(prepareMask(m, 8000, 6000), u * 8000, v * 6000);
+    const prev = maskWeight(prepareMask(m, 800, 600), u * 800, v * 600);
+    assert.ok(Math.abs(full - prev) < 1e-9, `(${u}, ${v})`);
+  }
+});
+
+test("stampBrush: a dab marks the center and falls off to the edge", () => {
+  const dims = brushCoverageDims(1000, 1000);
+  const cov = new Uint8Array(dims.w * dims.h);
+  // hard-ish dab at the center, full flow
+  stampBrush(cov, dims.w, dims.h, 0.5, 0.5, 0.1, 1, 1, false, 1);
+  const m = brushFromGrid([...cov], dims.w, dims.h);
+  const p = prepareMask(m, 1000, 1000);
+  // center fully covered, far corner untouched
+  assert.ok(maskWeight(p, 500, 500) > 0.99);
+  assert.equal(maskWeight(p, 10, 10), 0);
+});
+
+test("stampBrush: erase subtracts from existing coverage", () => {
+  const dims = brushCoverageDims(1000, 1000);
+  const cov = new Uint8Array(dims.w * dims.h).fill(255);
+  // erase a hard dab at the center
+  stampBrush(cov, dims.w, dims.h, 0.5, 0.5, 0.1, 1, 1, true, 1);
+  const m = brushFromGrid([...cov], dims.w, dims.h);
+  const p = prepareMask(m, 1000, 1000);
+  assert.ok(maskWeight(p, 500, 500) < 0.01); // center cleared
+  assert.equal(maskWeight(p, 10, 10), 1); // far corner still full
+});
+
+test("brush: applies its adjustments through the tone pipeline", () => {
+  // full coverage everywhere → behaves like a global exposure of +1.5 EV
+  const dims = { w: 2, h: 2 };
+  const m = brushFromGrid([255, 255, 255, 255], dims.w, dims.h);
+  m.adjustments = { ...m.adjustments, exposure: 1.5 };
+  const s = { ...ZERO_SETTINGS, masks: [m] };
+  const p = prepareMask(m, 100, 100);
+  const w = maskWeight(p, 50, 50);
+  const local = applyTonePixel(0.1, 0.1, 0.1, s, [w]);
+  const global = applyTonePixel(0.1, 0.1, 0.1, {
+    ...ZERO_SETTINGS,
+    exposure: 1.5,
+  });
+  assert.ok(Math.abs(local[0] - global[0]) < 1e-9);
 });
 
 // --- application through the tone pipeline ---

@@ -149,6 +149,22 @@ export const MASK = {
   RADIAL_FEATHER: 0.5,
   /** Default radial semi-axes, as fractions of min(width, height). */
   RADIAL_RADIUS: [0.35, 0.25],
+  /**
+   * Brush (drawn) mask coverage raster: a resolution-independent grid in
+   * normalized frame-UV space so the downscaled preview and the full-res
+   * export sample the *same* coverage. The grid's longest edge is BRUSH_RES
+   * texels; the short edge follows the frame aspect. Values are 0–255
+   * coverage, bilinearly sampled (LINEAR-filtered R8 on the GPU,
+   * hand-bilinear on the CPU) — the same approach as Lightroom's brush /
+   * darktable's drawn-mask raster.
+   */
+  BRUSH_RES: 1024,
+  /** Default brush radius, as a fraction of the frame's longest edge. */
+  BRUSH_RADIUS: 0.08,
+  /** Default brush hardness in [0, 1] (1 = hard edge, 0 = full feather). */
+  BRUSH_HARDNESS: 0.5,
+  /** Default brush flow in [0, 1] (per-dab opacity accumulation). */
+  BRUSH_FLOW: 0.5,
 };
 
 /**
