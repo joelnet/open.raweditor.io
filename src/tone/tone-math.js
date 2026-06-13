@@ -575,6 +575,8 @@ export function toneMapRows(
   const fw = frame.width;
   const fh = frame.height;
   const orient = geometry.orient & 3;
+  const flipH = geometry.flipH;
+  const flipV = geometry.flipV;
   const rad = (geometry.angle * Math.PI) / 180;
   const cosA = Math.cos(rad);
   const sinA = Math.sin(rad);
@@ -625,11 +627,12 @@ export function toneMapRows(
         g = decodeInput(data[src + 1] / maxVal);
         b = decodeInput(data[src + 2] / maxVal);
       } else {
-        let qx = fx;
-        let qy = fy;
+        // flip first, in frame space (mirrors frameToSource in geometry.js)
+        let qx = flipH ? fw - fx : fx;
+        let qy = flipV ? fh - fy : fy;
         if (sinA !== 0) {
-          const px = fx - fw / 2;
-          const py = fy - fh / 2;
+          const px = qx - fw / 2;
+          const py = qy - fh / 2;
           qx = (cosA * px + sinA * py) * inv + fw / 2;
           qy = (-sinA * px + cosA * py) * inv + fh / 2;
         }

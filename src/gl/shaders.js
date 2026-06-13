@@ -93,6 +93,7 @@ uniform vec3 u_airlight;
 // frame UV (the oriented image); frameToSourceUv mirrors frameToSource()
 // in tone/geometry.js.
 uniform int u_orient;           // 0–3
+uniform ivec2 u_flip;           // mirror frame x / y (0 or 1 each)
 uniform vec2 u_rot;             // cos, sin of the straighten angle
 uniform float u_coverScale;     // ≥ 1, keeps the frame free of blank corners
 uniform vec2 u_frame;           // frame size in px (oriented preview dims)
@@ -246,6 +247,11 @@ vec3 applyMaskAdjust(vec3 rgb, float m, vec4 adjA, vec4 adjB, vec4 adjC) {
 }
 
 vec2 frameToSourceUv(vec2 uv) {
+  // flip first, in frame UV (mirrors frameToSource in tone/geometry.js:
+  // f.x → 1 - f.x, f.y → 1 - f.y) so it composes the same way under the
+  // 90° turns and straighten that follow
+  if (u_flip.x == 1) uv.x = 1.0 - uv.x;
+  if (u_flip.y == 1) uv.y = 1.0 - uv.y;
   vec2 p = (uv - 0.5) * u_frame;
   // inverse of the on-screen CW rotation (y-down coordinates)
   p = vec2(u_rot.x * p.x + u_rot.y * p.y, -u_rot.y * p.x + u_rot.x * p.y)

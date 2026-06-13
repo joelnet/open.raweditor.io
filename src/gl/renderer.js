@@ -120,6 +120,7 @@ export function createRenderer(canvas) {
   const locViewOffset = gl.getUniformLocation(program, "u_view_offset");
   const locViewScale = gl.getUniformLocation(program, "u_view_scale");
   const locOrient = gl.getUniformLocation(program, "u_orient");
+  const locFlip = gl.getUniformLocation(program, "u_flip");
   const locRot = gl.getUniformLocation(program, "u_rot");
   const locCoverScale = gl.getUniformLocation(program, "u_coverScale");
   const locFrame = gl.getUniformLocation(program, "u_frame");
@@ -176,6 +177,7 @@ export function createRenderer(canvas) {
     const frame = orientedDims(geometry.orient, imgW, imgH);
     const rad = (geometry.angle * Math.PI) / 180;
     gl.uniform1i(locOrient, geometry.orient & 3);
+    gl.uniform2i(locFlip, geometry.flipH ? 1 : 0, geometry.flipV ? 1 : 0);
     gl.uniform2f(locRot, Math.cos(rad), Math.sin(rad));
     gl.uniform1f(
       locCoverScale,

@@ -7,14 +7,23 @@
 // and the CPU export both sample through frameToSource so they can never
 // drift apart.
 
-/** @typedef {{ orient: number, angle: number }} Geometry
- * orient: quarter-turns clockwise (0–3); angle: degrees, +CW on screen */
+/** @typedef {{ orient: number, angle: number, flipH: boolean, flipV: boolean }} Geometry
+ * orient: quarter-turns clockwise (0–3); angle: degrees, +CW on screen;
+ * flipH/flipV: mirror the frame horizontally / vertically. The flip is
+ * applied first, in frame space (what the user currently sees), so a flip
+ * reads the same no matter how the image is rotated, double-flip is the
+ * identity, and flipH+flipV samples the same source pixels as a 180° turn. */
 
-export const ZERO_GEOMETRY = Object.freeze({ orient: 0, angle: 0 });
+export const ZERO_GEOMETRY = Object.freeze({
+  orient: 0,
+  angle: 0,
+  flipH: false,
+  flipV: false,
+});
 
 /** @param {Geometry} g */
 export function isIdentityGeometry(g) {
-  return g.orient === 0 && g.angle === 0;
+  return g.orient === 0 && g.angle === 0 && !g.flipH && !g.flipV;
 }
 
 /**
@@ -51,6 +60,11 @@ export function coverScale(angle, w, h) {
  */
 export function frameToSource(g, fx, fy, srcW, srcH) {
   const { width: fw, height: fh } = orientedDims(g.orient, srcW, srcH);
+  // Flip first, in frame space — mirrors the user's current view, so the
+  // flip composes the same way regardless of the 90° turns or straighten
+  // that follow.
+  if (g.flipH) fx = fw - fx;
+  if (g.flipV) fy = fh - fy;
   let qx = fx;
   let qy = fy;
   if (g.angle !== 0) {

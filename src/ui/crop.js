@@ -84,6 +84,8 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   let fullH = 0;
   let orient = 0; // quarter-turns clockwise
   let angle = 0; // straighten, degrees, +CW
+  let flipH = false; // mirror the frame horizontally
+  let flipV = false; // mirror the frame vertically
   /** @type {import("../tone/tone-math.js").CropRect} */
   let rectOnEnter = { ...FULL_RECT };
   let dispW = 0; // canvas CSS box, cached by reposition()
@@ -263,6 +265,49 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   rotCwBtn.disabled = true;
   rotateRow.append(rotCcwBtn, rotCwBtn);
 
+  // Flip mirrors the image content beneath the crop and masks (which stay
+  // put in frame space — Lightroom keeps your crop + local adjustments and
+  // mirrors the photo). It only changes frame→source sampling, so no rect
+  // or mask anchor moves here; geometry() carries the flags onward.
+  const flipRow = el("div", "crop-actions crop-flip");
+  const flipHBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "⇋ Flip H")
+  );
+  const flipVBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "⇅ Flip V")
+  );
+  flipHBtn.type = "button";
+  flipVBtn.type = "button";
+  flipHBtn.title = "Flip horizontal";
+  flipVBtn.title = "Flip vertical";
+  flipHBtn.setAttribute("aria-label", "flip horizontal");
+  flipVBtn.setAttribute("aria-label", "flip vertical");
+  flipHBtn.setAttribute("aria-pressed", "false");
+  flipVBtn.setAttribute("aria-pressed", "false");
+  flipHBtn.disabled = true;
+  flipVBtn.disabled = true;
+  flipRow.append(flipHBtn, flipVBtn);
+
+  function syncFlipUi() {
+    flipHBtn.classList.toggle("active", flipH);
+    flipVBtn.classList.toggle("active", flipV);
+    flipHBtn.setAttribute("aria-pressed", String(flipH));
+    flipVBtn.setAttribute("aria-pressed", String(flipV));
+  }
+
+  flipHBtn.addEventListener("click", () => {
+    if (!enabled || imgW === 0) return;
+    flipH = !flipH;
+    syncFlipUi();
+    handlers.onGeometryChange();
+  });
+  flipVBtn.addEventListener("click", () => {
+    if (!enabled || imgW === 0) return;
+    flipV = !flipV;
+    syncFlipUi();
+    handlers.onGeometryChange();
+  });
+
   const angleRow = el("div", "slider-row crop-angle");
   const angleLabel = el("span", "slider-label", "STRAIGHTEN");
   const angleValue = el("span", "slider-value", "0.0°");
@@ -320,7 +365,7 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   resetBtn.disabled = true;
   actions.append(cropBtn, resetBtn);
   const sizeLine = el("div", "crop-size");
-  body.append(chips, rotateRow, angleRow, actions, sizeLine);
+  body.append(chips, rotateRow, flipRow, angleRow, actions, sizeLine);
   section.append(body);
   panelContainer.append(section);
 
@@ -442,10 +487,13 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   resetBtn.addEventListener("click", () => {
     rect = { ...FULL_RECT };
     setChipsToFree();
-    const geoChanged = orient !== 0 || angle !== 0;
+    const geoChanged = orient !== 0 || angle !== 0 || flipH || flipV;
     orient = 0;
     angle = 0;
+    flipH = false;
+    flipV = false;
     syncAngleUi();
+    syncFlipUi();
     updateBox();
     updateSize();
     if (geoChanged) handlers.onGeometryChange();
@@ -515,7 +563,10 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
     rect = { ...FULL_RECT };
     orient = 0;
     angle = 0;
+    flipH = false;
+    flipV = false;
     syncAngleUi();
+    syncFlipUi();
     if (active) {
       active = false;
       drag = null;
@@ -532,7 +583,7 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
     /** @returns {import("../tone/tone-math.js").CropRect} */
     rect: () => ({ ...rect }),
     /** @returns {import("../tone/geometry.js").Geometry} */
-    geometry: () => ({ orient, angle }),
+    geometry: () => ({ orient, angle, flipH, flipV }),
     isActive: () => active,
     reposition,
     reset,
@@ -556,6 +607,8 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
       resetBtn.disabled = !on;
       rotCwBtn.disabled = !on;
       rotCcwBtn.disabled = !on;
+      flipHBtn.disabled = !on;
+      flipVBtn.disabled = !on;
       angleInput.disabled = !on;
       for (const c of chipButtons) c.disabled = !on;
     },
