@@ -780,7 +780,8 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   let strokeDirty = false; // coverage changed but not yet committed
   let strokeRaf = 0;
 
-  /** @param {PointerEvent} e @returns {[number, number]} paint-local px */
+  /** @param {MouseEvent} e @returns {[number, number]} paint-local px
+   * (MouseEvent base covers both PointerEvent strokes and WheelEvent resize) */
   function paintPoint(e) {
     const r = paint.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top];
@@ -890,6 +891,30 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   }
   paint.addEventListener("pointerup", endStroke);
   paint.addEventListener("pointercancel", endStroke);
+
+  // Wheel over the paint surface resizes the brush (like the SIZE slider).
+  // The paint overlay sits above the canvas as a sibling, so the canvas's
+  // zoom-wheel handler never sees this event — no conflict. Step grows with
+  // the current size (~15% per notch, min 1) so it feels right across the
+  // whole range.
+  paint.addEventListener(
+    "wheel",
+    (e) => {
+      if (!paintActive()) return;
+      e.preventDefault();
+      const units = Math.round(brushSize * 100);
+      const step = Math.max(1, Math.round(units * 0.15));
+      const min = Math.round(BRUSH_SIZE_MIN * 100);
+      const max = Math.round(BRUSH_SIZE_MAX * 100);
+      const dir = e.deltaY < 0 ? 1 : -1;
+      brushSize = Math.min(Math.max(units + dir * step, min), max) / 100;
+      sizeRow.sync();
+      const [px, py] = paintPoint(e);
+      brushCursor.hidden = false;
+      updateBrushCursor(px, py);
+    },
+    { passive: false },
+  );
 
   // --- sidebar sync ---
 

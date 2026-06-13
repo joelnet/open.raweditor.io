@@ -1282,9 +1282,13 @@ button:disabled {
   border-color: var(--accent-red);
 }
 
-/* separator between a mask's shape/brush tools and its adjustment sliders */
+/* separator between a mask's shape/brush tools and its adjustment sliders.
+   Uses the lighter --muted (not --panel-edge, which matches the slider
+   tracks and reads as just another control) with generous spacing so it's
+   unmistakably a section break. */
 .mask-divider {
   height: 0;
-  margin: 8px 12px 4px;
-  border-top: 1px solid var(--panel-edge);
+  margin: 14px 12px 8px;
+  border-top: 1px solid var(--muted);
+  opacity: 0.6;
 }
