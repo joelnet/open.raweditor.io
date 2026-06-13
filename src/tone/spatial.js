@@ -16,7 +16,7 @@
 //   clarity  — base-band local contrast with d·exp(-k·d²) halo rolloff
 //   dehaze   — dark channel prior + guided-filter transmission refinement
 
-import { LUMA, SPATIAL } from "./constants.js";
+import { LUMA, SPATIAL, NR } from "./constants.js";
 import { decodeInput, encodeInput } from "./tone-math.js";
 
 // --- luminance planes -------------------------------------------------
@@ -163,6 +163,29 @@ export function textureDelta(d, band, s) {
 }
 
 /**
+ * Noise-reduction delta for the FINEST à trous band (negative NOISE
+ * slider): edge-preserving soft-threshold (coring). Detail coefficients
+ * below the noise floor are pulled toward zero (smoothing flats), while
+ * larger ones — edges — keep their amplitude minus the floor, so structure
+ * survives. The returned value is what to ADD to the gamma-luma so that the
+ * finest band is replaced by its shrunk version: shrink(d1) − d1, scaled by
+ * the slider magnitude. This is the wavelet-shrinkage recipe behind
+ * darktable denoise / RawTherapee wavelet NR, applied to only the finest
+ * band (distinct from negative Texture's whole-band attenuation).
+ * @param {number} d1 finest-band detail y0 − c1 (gamma units)
+ * @param {number} amount NR strength [0, 1] (|negative slider|)
+ */
+export function nrDelta(d1, amount) {
+  if (amount <= 0) return 0;
+  const tau = NR.THRESH;
+  const a = Math.abs(d1);
+  // soft threshold: |d| ≤ τ → 0, else sign(d)·(|d| − τ)
+  const shrunk = a <= tau ? 0 : Math.sign(d1) * (a - tau);
+  // amount interpolates between the original band (0) and the cored band (1)
+  return amount * (shrunk - d1);
+}
+
+/**
  * Clarity boost for the base-band detail. The exp rolloff starves large
  * edges (the halo generators) of gain; the midtone parabola keeps the
  * endpoints from clipping.
@@ -210,16 +233,19 @@ export function dehazeTransmission(D, s) {
 
 /**
  * ΔY' plane for fixed slider values — the export-path equivalent of the
- * shader evaluating textureDelta/clarityDelta against the detail planes.
- * Accumulates during the decomposition so full-resolution images never
- * hold all the level planes at once.
+ * shader evaluating textureDelta/clarityDelta/nrDelta against the detail
+ * planes. Accumulates during the decomposition so full-resolution images
+ * never hold all the level planes at once. `nr` is the noise-reduction
+ * amount (the magnitude of a negative NOISE slider); it cores the finest
+ * band only.
  * @param {Float32Array} luma linear-light luma plane
  * @param {number} w @param {number} h
  * @param {number} scale integer ≥ 1
  * @param {number} texture slider [-1, 1]
  * @param {number} clarity slider [-1, 1]
+ * @param {number} [nr] noise-reduction amount [0, 1]
  */
-export function computeDeltaPlane(luma, w, h, scale, texture, clarity) {
+export function computeDeltaPlane(luma, w, h, scale, texture, clarity, nr = 0) {
   const n = w * h;
   const y0 = gammaPlane(luma);
   let cur = Float32Array.from(y0);
@@ -229,6 +255,12 @@ export function computeDeltaPlane(luma, w, h, scale, texture, clarity) {
   const levels = clarity !== 0 ? SPATIAL.DETAIL_LEVELS : SPATIAL.TEXTURE_BANDS;
   for (let j = 0; j < levels; j++) {
     atrousPass(cur, next, tmp, w, h, scale * (1 << j));
+    if (j === 0 && nr > 0) {
+      // finest band = y0 − c1 → soft-threshold coring (edge-preserving NR)
+      for (let i = 0; i < n; i++) {
+        delta[i] += nrDelta(cur[i] - next[i], nr);
+      }
+    }
     if (texture !== 0 && j < SPATIAL.TEXTURE_BANDS) {
       for (let i = 0; i < n; i++) {
         delta[i] += textureDelta(cur[i] - next[i], j, texture);
@@ -558,7 +590,10 @@ export function applyPresencePrepass(image, settings, scale = 1) {
   const texture = settings.texture ?? 0;
   const clarity = settings.clarity ?? 0;
   const dehaze = settings.dehaze ?? 0;
-  if (texture === 0 && clarity === 0 && dehaze === 0) return;
+  // Negative NOISE slider = wavelet-shrinkage denoise on the finest band
+  // (positive NOISE is chromatic noise added in the display post-step).
+  const nr = Math.max(-(settings.noise ?? 0), 0);
+  if (texture === 0 && clarity === 0 && dehaze === 0 && nr === 0) return;
 
   const { data, width, height, colors, bits } = image;
   const maxVal = bits === 16 ? 65535 : 255;
@@ -566,8 +601,8 @@ export function applyPresencePrepass(image, settings, scale = 1) {
   const aux =
     dehaze !== 0 ? computeDehazeAux(downsampleRgbFromImage(image)) : null;
   const delta =
-    texture !== 0 || clarity !== 0
-      ? computeDeltaPlane(luma, width, height, scale, texture, clarity)
+    texture !== 0 || clarity !== 0 || nr > 0
+      ? computeDeltaPlane(luma, width, height, scale, texture, clarity, nr)
       : null;
 
   for (let y = 0; y < height; y++) {

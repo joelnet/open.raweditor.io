@@ -159,5 +159,76 @@ export const MASK = {
  */
 export const INPUT_TRANSFER = "linear";
 
+/**
+ * Display-referred effects applied as a shared post-step on the final
+ * sRGB-encoded RGB (after color grading), taking frame-normalized pixel
+ * coordinates so the GPU preview and the CPU export land on the identical
+ * grid regardless of resolution. Order in the post-step: grain → chromatic
+ * noise → invert (invert is always the final operation).
+ *
+ *   invert — display-referred photo negative, `1 - display` on the
+ *     sRGB-encoded value (GIMP "Colors → Invert", the perceptual invert;
+ *     "Linear Invert" would un-gamma-correct first and look wrong as a
+ *     negative). The toggle is stored as 0/1 for uniform compatibility.
+ *
+ *   grain — monochromatic LUMINANCE grain with darktable's midtone bias
+ *     (its grain module fades the perturbation in shadows and highlights so
+ *     the toe and shoulder stay clean), driven by Lightroom's
+ *     Amount/Size/Roughness controls. Grain is a deterministic function of
+ *     frame-normalized cell coordinates (an integer hash → value noise), so
+ *     a downscaled preview and a full-res export show grain of the same
+ *     visual size and character — no time, no RNG.
+ *
+ *   noise (positive half of the bipolar slider) — fine CHROMATIC digital
+ *     noise (independent per channel, ~1 cell), the additive side of the
+ *     RawTherapee/GIMP "add noise" operators, kept distinct from the mono
+ *     grain. The negative half is wavelet-shrinkage denoise and lives in the
+ *     presence prepass (see SPATIAL.NR_*), not here.
+ */
+export const EFFECTS = {
+  /** Grain cells across the frame's long edge at Size 0 (Lightroom's
+   *  default grain is fairly fine; Size scales this down toward coarser
+   *  clumps). darktable scales grain by an ISO-like coarseness; we expose
+   *  it as a cell count so preview and export share one normalized grid. */
+  GRAIN_GRID_BASE: 900,
+  /** Size slider 1 multiplies the cell size by this (fewer, larger cells);
+   *  Size −1 divides by it (finer). Geometric so 0 is the neutral middle. */
+  GRAIN_GRID_RANGE: 3.0,
+  /** Amount 1 perturbs display luma by ±GRAIN_STRENGTH at the midtones
+   *  (before the midtone falloff), in sRGB-encoded units. */
+  GRAIN_STRENGTH: 0.18,
+  /** Roughness 1 routes this fraction of the grain through a second, finer
+   *  octave (fractal value noise), making the grain less uniform — the
+   *  open-source "roughness/octave mix" knob. */
+  GRAIN_ROUGHNESS_MIX: 0.6,
+  /** Finer octave's grid multiplier relative to the base grain grid. */
+  GRAIN_OCTAVE2: 2.7,
+  /** Midtone-bias exponent: weight = (4·y·(1−y))^GRAIN_MIDTONE so grain
+   *  peaks at mid display luma and fades to nothing at 0 and 1. */
+  GRAIN_MIDTONE: 0.7,
+  /** Chromatic noise (positive NOISE slider) cells across the long edge —
+   *  near one cell per pixel at preview scale, i.e. very fine. */
+  NOISE_GRID: 1400,
+  /** NOISE +1 perturbs each display channel by ±NOISE_STRENGTH. */
+  NOISE_STRENGTH: 0.12,
+};
+
+/**
+ * Noise reduction (negative half of the bipolar NOISE slider): edge-
+ * preserving soft-threshold (coring) of the finest à trous detail band in
+ * the presence prepass, reusing the detail planes spatial.js already
+ * computes. Below the noise floor the finest-band detail is shrunk toward
+ * zero so flat areas smooth out while edges (large coefficients) survive —
+ * the wavelet-shrinkage recipe behind darktable's denoise and RawTherapee's
+ * wavelet NR. Distinct from negative Texture, which attenuates whole bands
+ * broadband; NR cores only the finest band.
+ */
+export const NR = {
+  /** NOISE −1 soft-threshold on the finest-band detail (gamma-luma units).
+   *  Coefficients below this collapse toward zero; above it they keep their
+   *  amplitude minus the floor (classic soft threshold). */
+  THRESH: 0.05,
+};
+
 /** Rec.709 luma weights used for the shadows/highlights masks. */
 export const LUMA = [0.2126, 0.7152, 0.0722];

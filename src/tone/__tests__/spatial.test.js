@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SPATIAL } from "../constants.js";
+import { SPATIAL, NR } from "../constants.js";
 import {
   atrousPass,
   computeDetailPlanes,
   computeDeltaPlane,
   textureDelta,
   clarityDelta,
+  nrDelta,
   presenceRatio,
   dehazeTransmission,
   computeDehazeAux,
@@ -78,6 +79,26 @@ test("clarityDelta: rolloff starves large edges of gain", () => {
   const large = clarityDelta(1, 0.5, 1);
   assert.ok(small > 0);
   assert.ok(Math.abs(large) < Math.abs(small)); // halo killer
+});
+
+test("nrDelta: zero amount is identity, soft-threshold cores small detail", () => {
+  assert.equal(nrDelta(0.5, 0), 0); // no NR
+  // detail below the noise floor is fully removed (added delta = -d1)
+  const small = NR.THRESH * 0.4;
+  assert.ok(Math.abs(nrDelta(small, 1) + small) < EPS, "flats smoothed");
+  assert.ok(Math.abs(nrDelta(-small, 1) - small) < EPS);
+  // a large edge keeps most of its amplitude: shrink is d - THRESH, so the
+  // delta only subtracts the floor, never flips the sign
+  const edge = 0.4;
+  const cored = edge + nrDelta(edge, 1); // = shrunk value
+  assert.ok(Math.abs(cored - (edge - NR.THRESH)) < EPS, "edge survives");
+  assert.ok(cored > 0, "edge keeps its sign");
+});
+
+test("nrDelta: amount interpolates between original and fully cored", () => {
+  const d = NR.THRESH * 0.5; // below the floor → fully cored is 0
+  assert.ok(Math.abs(nrDelta(d, 1) + d) < EPS); // amount 1 → removes it all
+  assert.ok(Math.abs(nrDelta(d, 0.5) + d * 0.5) < EPS); // halfway
 });
 
 test("presenceRatio: identity at zero delta, capped at RATIO_MAX", () => {
@@ -162,6 +183,44 @@ test("applyPresencePrepass: positive texture adds local contrast, negative remov
   const smoothed = make();
   applyPresencePrepass(smoothed, { ...ZERO_SETTINGS, texture: -1 }, 1);
   assert.ok(variance(smoothed.data) < base, "texture -1 must smooth detail");
+});
+
+test("applyPresencePrepass: negative noise (denoise) smooths a noisy flat", () => {
+  /** local high-frequency variance: mean squared finest-band detail */
+  function fineVar(/** @type {Uint16Array} */ data, w, h) {
+    let s = 0;
+    let n = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 1; x < w; x++) {
+        const a = data[(y * w + x) * 3];
+        const b = data[(y * w + x - 1) * 3];
+        s += (a - b) ** 2;
+        n++;
+      }
+    }
+    return s / n;
+  }
+  // a mid-gray flat with fine pixel noise (the denoise target)
+  const make = () =>
+    grayImage(48, 32, (x, y) => 0.45 + 0.03 * (rand(y * 48 + x) - 0.5) * 2);
+  const before = fineVar(make().data, 48, 32);
+  const img = make();
+  applyPresencePrepass(img, { ...ZERO_SETTINGS, noise: -1 }, 1);
+  const after = fineVar(img.data, 48, 32);
+  assert.ok(
+    after < before,
+    `denoise must reduce fine variance (${before}->${after})`,
+  );
+});
+
+test("applyPresencePrepass: negative noise preserves an edge", () => {
+  // a hard vertical edge: denoise must not flatten it (coring keeps edges)
+  const img = grayImage(32, 24, (x) => (x < 16 ? 0.2 : 0.8));
+  applyPresencePrepass(img, { ...ZERO_SETTINGS, noise: -1 }, 1);
+  const mid = 12 * 32;
+  const lo = img.data[(mid + 4) * 3] / 65535;
+  const hi = img.data[(mid + 27) * 3] / 65535;
+  assert.ok(hi - lo > 0.45, `edge contrast must survive (${lo} vs ${hi})`);
 });
 
 test("applyPresencePrepass: dehaze recovers dark objects under synthetic haze", () => {

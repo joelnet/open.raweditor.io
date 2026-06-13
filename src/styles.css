@@ -956,6 +956,30 @@ button:disabled {
   pointer-events: none;
 }
 
+/* ---- effects: NEGATIVE (invert) toggle, styled like the mask tools ---- */
+
+.effects-tools {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px 2px;
+}
+
+.effects-tools button {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.effects-toggle.active:not(:disabled) {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.section.bypassed .effects-tools {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .export-body {
   padding: 10px 12px 6px;
   display: flex;
