@@ -3,9 +3,10 @@
 // colored left accent bars, uppercase monospace headers, green/red value
 // readouts.
 
-import { SECTIONS, GRADE_KEYS, HSL_KEYS } from "../state.js";
+import { SECTIONS, GRADE_KEYS, HSL_KEYS, EFFECTS_KEYS } from "../state.js";
 import { buildGrading } from "./grading.js";
 import { buildMixer } from "./mixer.js";
+import { buildEffects } from "./effects.js";
 
 export const EYE_OPEN =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
@@ -54,8 +55,11 @@ export function buildPanel(
   // treated as zero by effectiveSettings(), giving a before/after preview.
   /** @type {Set<string>} */
   const bypassed = new Set();
-  /** @typedef {{ title: string, section: HTMLElement, eye: HTMLButtonElement,
-   *              auto: HTMLButtonElement, inputs: HTMLInputElement[] }} SectionEntry */
+  /** `buttons` holds bespoke section controls (e.g. the EFFECTS NEGATIVE
+   *  toggle) so they disable/bypass alongside the slider inputs.
+   * @typedef {{ title: string, section: HTMLElement, eye: HTMLButtonElement,
+   *              auto: HTMLButtonElement, inputs: HTMLInputElement[],
+   *              buttons: HTMLButtonElement[] }} SectionEntry */
   /** @type {SectionEntry[]} */
   const entries = [];
   let panelEnabled = false;
@@ -69,6 +73,7 @@ export function buildPanel(
     entry.eye.setAttribute("aria-pressed", String(!off));
     entry.auto.disabled = !panelEnabled || off;
     for (const input of entry.inputs) input.disabled = !panelEnabled || off;
+    for (const btn of entry.buttons) btn.disabled = !panelEnabled || off;
   }
 
   /**
@@ -132,7 +137,7 @@ export function buildPanel(
     section.append(header);
 
     /** @type {SectionEntry} */
-    const entry = { title, section, eye, auto, inputs: [] };
+    const entry = { title, section, eye, auto, inputs: [], buttons: [] };
     entries.push(entry);
     auto.addEventListener("click", () => onAuto(title));
     eye.addEventListener("click", () => {
@@ -144,6 +149,12 @@ export function buildPanel(
       buildGrading(section, store, (def) => makeRow(def, entry));
     } else if (sectionDef.mixer) {
       buildMixer(section, (def) => makeRow(def, entry));
+    } else if (sectionDef.effects) {
+      const { toggle } = buildEffects(section, store, (def) =>
+        makeRow(def, entry),
+      );
+      toggle.disabled = true;
+      entry.buttons.push(toggle);
     } else {
       for (const def of sliders) section.append(makeRow(def, entry));
     }
@@ -217,6 +228,9 @@ export function buildPanel(
         for (const input of entry.inputs) {
           input.disabled = !enabled || bypassed.has(entry.title);
         }
+        for (const btn of entry.buttons) {
+          btn.disabled = !enabled || bypassed.has(entry.title);
+        }
       }
       pngBtn.disabled = !enabled;
       jpgBtn.disabled = !enabled;
@@ -238,7 +252,9 @@ export function buildPanel(
           ? GRADE_KEYS
           : sec.mixer
             ? HSL_KEYS
-            : sec.sliders.map((d) => d.key);
+            : sec.effects
+              ? EFFECTS_KEYS
+              : sec.sliders.map((d) => d.key);
         for (const key of keys) out[key] = 0;
       }
       return out;

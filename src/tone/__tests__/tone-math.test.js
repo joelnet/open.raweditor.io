@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TONE } from "../constants.js";
+import { TONE, EFFECTS } from "../constants.js";
 import {
   ZERO_SETTINGS,
   applyTonePixel,
+  applyDisplayEffects,
   srgbEncode,
   srgbDecode,
   toneMapRows,
@@ -549,6 +550,169 @@ test("toneMapRows writes 16-bit output into a Uint16Array", () => {
     assert.equal(out[p * 4 + 1], Math.round(eg * 65535));
     assert.equal(out[p * 4 + 2], Math.round(eb * 65535));
     assert.equal(out[p * 4 + 3], 65535);
+  }
+});
+
+// --- EFFECTS: invert / grain / chromatic noise (display post-step) -------
+
+test("display effects: identity at ZERO_SETTINGS for any pixel/position", () => {
+  for (const u of [0, 0.31, 0.5, 0.87, 1]) {
+    for (const v of [0, 0.42, 1]) {
+      for (const px of [
+        [0, 0, 0],
+        [0.18, 0.5, 0.9],
+        [1, 1, 1],
+      ]) {
+        const out = applyDisplayEffects(
+          px[0],
+          px[1],
+          px[2],
+          ZERO_SETTINGS,
+          u,
+          v,
+          1000,
+          667,
+        );
+        assert.deepEqual(out, px, `u=${u} v=${v} px=${px}`);
+      }
+    }
+  }
+});
+
+test("invert: photo negative is 1 - display on every channel", () => {
+  const s = settings({ invert: 1 });
+  for (const px of [
+    [0, 0, 0],
+    [0.2, 0.6, 0.9],
+    [1, 1, 1],
+  ]) {
+    const out = applyDisplayEffects(px[0], px[1], px[2], s, 0.5, 0.5, 100, 100);
+    assert.ok(Math.abs(out[0] - (1 - px[0])) < EPS);
+    assert.ok(Math.abs(out[1] - (1 - px[1])) < EPS);
+    assert.ok(Math.abs(out[2] - (1 - px[2])) < EPS);
+  }
+});
+
+test("invert composes through toneMapRows (both encode paths)", () => {
+  const width = 2;
+  const height = 1;
+  const data = new Uint16Array([13107, 26214, 39321, 52428, 6553, 19660]);
+  const image = { data, width, height, colors: 3, bits: 16 };
+  // plain encode path and the grading path both get inverted at the end
+  for (const extra of [{}, { gradeShadowSat: 1, gradeShadowHue: 0 }]) {
+    const base = settings(extra);
+    const inv = settings({ ...extra, invert: 1 });
+    const outBase = new Uint8ClampedArray(width * height * 4);
+    const outInv = new Uint8ClampedArray(width * height * 4);
+    toneMapRows(image, base, outBase, 0, height);
+    toneMapRows(image, inv, outInv, 0, height);
+    for (let p = 0; p < width; p++) {
+      for (let c = 0; c < 3; c++) {
+        // 255 - base (Uint8Clamped rounds both); allow ±1 for rounding
+        assert.ok(
+          Math.abs(outInv[p * 4 + c] - (255 - outBase[p * 4 + c])) <= 1,
+          `extra=${JSON.stringify(extra)} px${p} ch${c}`,
+        );
+      }
+      assert.equal(outInv[p * 4 + 3], 255);
+    }
+  }
+});
+
+test("grain: zero amount is identity, nonzero perturbs but stays in [0,1]", () => {
+  const off = applyDisplayEffects(
+    0.5,
+    0.5,
+    0.5,
+    ZERO_SETTINGS,
+    0.3,
+    0.3,
+    99,
+    99,
+  );
+  assert.deepEqual(off, [0.5, 0.5, 0.5]);
+  const on = settings({ grainAmount: 1 });
+  let moved = false;
+  for (let i = 0; i < 50; i++) {
+    const out = applyDisplayEffects(0.5, 0.5, 0.5, on, i / 50, 0.5, 1000, 1000);
+    for (const ch of out) assert.ok(ch >= 0 && ch <= 1);
+    // monochromatic: all three channels shift by the same amount
+    assert.ok(
+      Math.abs(out[0] - out[1]) < EPS && Math.abs(out[1] - out[2]) < EPS,
+    );
+    if (Math.abs(out[0] - 0.5) > 1e-4) moved = true;
+  }
+  assert.ok(moved, "grain must perturb some positions");
+});
+
+test("grain: midtone bias fades grain at black and white", () => {
+  const s = settings({ grainAmount: 1 });
+  // pure black and white have midtone weight 0, so grain can't move them
+  for (const v of [0, 1]) {
+    for (let i = 0; i < 20; i++) {
+      const out = applyDisplayEffects(v, v, v, s, i / 20, 0.4, 800, 600);
+      assert.ok(Math.abs(out[0] - v) < EPS, `v=${v} i=${i}`);
+    }
+  }
+});
+
+test("grain: deterministic and resolution-independent (preview == export)", () => {
+  // same frame-normalized coordinate must yield the same grain regardless
+  // of resolution — the preview/export parity guarantee
+  const s = settings({ grainAmount: 0.8, grainSize: 0.2, grainRoughness: 0.5 });
+  for (const u of [0.12, 0.5, 0.83]) {
+    for (const v of [0.2, 0.77]) {
+      const a = applyDisplayEffects(0.5, 0.5, 0.5, s, u, v, 600, 400);
+      const b = applyDisplayEffects(0.5, 0.5, 0.5, s, u, v, 600, 400);
+      assert.deepEqual(a, b, "must be deterministic");
+      // aspect-matched larger frame, same aspect ratio, same normalized
+      // coords → identical grain value
+      const big = applyDisplayEffects(0.5, 0.5, 0.5, s, u, v, 6000, 4000);
+      assert.deepEqual(a, big, `scale-invariant at u=${u} v=${v}`);
+    }
+  }
+});
+
+test("grain: size changes the cell scale (different grain field)", () => {
+  const fine = settings({ grainAmount: 1, grainSize: -1 });
+  const coarse = settings({ grainAmount: 1, grainSize: 1 });
+  let differ = 0;
+  for (let i = 0; i < 64; i++) {
+    const u = i / 64;
+    const f = applyDisplayEffects(0.5, 0.5, 0.5, fine, u, 0.5, 1000, 1000)[0];
+    const c = applyDisplayEffects(0.5, 0.5, 0.5, coarse, u, 0.5, 1000, 1000)[0];
+    if (Math.abs(f - c) > 1e-3) differ++;
+  }
+  assert.ok(differ > 10, "fine vs coarse grain fields must diverge");
+});
+
+test("noise: positive is chromatic (channels differ), negative adds nothing here", () => {
+  // positive: independent per-channel perturbation
+  const pos = settings({ noise: 1 });
+  let chromatic = false;
+  for (let i = 0; i < 40; i++) {
+    const out = applyDisplayEffects(0.5, 0.5, 0.5, pos, i / 40, 0.5, 800, 800);
+    for (const ch of out) assert.ok(ch >= 0 && ch <= 1);
+    if (Math.abs(out[0] - out[1]) > 1e-4 || Math.abs(out[1] - out[2]) > 1e-4) {
+      chromatic = true;
+    }
+  }
+  assert.ok(chromatic, "positive noise must vary per channel");
+  // negative noise is denoise (a prepass) — the display post-step is a no-op
+  const neg = settings({ noise: -1 });
+  for (let i = 0; i < 20; i++) {
+    const out = applyDisplayEffects(0.4, 0.5, 0.6, neg, i / 20, 0.3, 800, 800);
+    assert.deepEqual(out, [0.4, 0.5, 0.6], "negative noise must not add here");
+  }
+});
+
+test("grain max strength bounded by GRAIN_STRENGTH at midtones", () => {
+  // at full amount, no roughness, the perturbation magnitude can't exceed
+  // GRAIN_STRENGTH (value noise in [-1,1], midtone weight ≤ 1)
+  const s = settings({ grainAmount: 1 });
+  for (let i = 0; i < 100; i++) {
+    const out = applyDisplayEffects(0.5, 0.5, 0.5, s, i / 100, 0.5, 500, 500);
+    assert.ok(Math.abs(out[0] - 0.5) <= EFFECTS.GRAIN_STRENGTH + EPS);
   }
 });
 

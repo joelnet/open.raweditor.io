@@ -14,6 +14,8 @@ import {
   HSL,
   SPATIAL,
   MASK,
+  EFFECTS,
+  NR,
   INPUT_TRANSFER,
   LUMA,
 } from "../tone/constants.js";
@@ -81,6 +83,13 @@ uniform float u_gradeHighLum;   // [-1, 1]
 uniform float u_gradeBlending;  // [0, 1]
 uniform float u_gradeBalance;   // [-1, 1]
 
+// EFFECTS: display-referred post-step (grain / noise / invert)
+uniform float u_invert;         // 0 or 1 (photo negative)
+uniform float u_grainAmount;    // [-1, 1] (only the magnitude matters)
+uniform float u_grainSize;      // [-1, 1]
+uniform float u_grainRoughness; // [-1, 1] (used as [0, 1])
+uniform float u_noise;          // [-1, 1] — positive adds chromatic noise
+
 // Presence aux, computed per image by spatial-worker.js (slider moves stay
 // single-pass): à trous detail planes of the source gamma-luma and the
 // guided-filter-refined haze amount. u_hasAux gates until they're ready.
@@ -141,6 +150,84 @@ vec3 softLight(vec3 a, vec3 b) {
   return (1.0 - 2.0 * b) * a * a + 2.0 * b * a;
 }
 
+// --- shared display-referred effects (grain / noise / invert) -----------
+// Mirrors applyDisplayEffects() + hash31()/valueNoise() in tone-math.js,
+// bit-for-bit: uint arithmetic, frame-normalized coordinates. Keyed off
+// v_uv * u_frame so the downscaled preview and the full-res export show
+// grain/noise of the same visual size.
+
+// integer hash → [0, 1) — mirrors hash31() in tone-math.js (uint mixing)
+float hash31(uint x, uint y, uint salt) {
+  uint h = x ^ (y * 0x9e3779b1u);
+  h = h ^ (salt * 0x85ebca77u);
+  h = (h ^ (h >> 15u)) * 0x2c1b3c6du;
+  h = (h ^ (h >> 12u)) * 0x297a2d39u;
+  h = h ^ (h >> 15u);
+  return float(h) / 4294967296.0;
+}
+
+// value-noise interpolant — mirrors fade() in tone-math.js
+float grainFade(float t) {
+  float u = clamp(t, 0.0, 1.0);
+  return u * u * (3.0 - 2.0 * u);
+}
+
+// bilinear value noise in [-1, 1) — mirrors valueNoise() in tone-math.js
+float valueNoise(float u, float v, float grid, uint salt) {
+  float gx = u * grid;
+  float gy = v * grid;
+  float x0 = floor(gx);
+  float y0 = floor(gy);
+  float fx = grainFade(gx - x0);
+  float fy = grainFade(gy - y0);
+  uint ix = uint(int(x0));
+  uint iy = uint(int(y0));
+  float c00 = hash31(ix, iy, salt);
+  float c10 = hash31(ix + 1u, iy, salt);
+  float c01 = hash31(ix, iy + 1u, salt);
+  float c11 = hash31(ix + 1u, iy + 1u, salt);
+  float top = c00 + (c10 - c00) * fx;
+  float bot = c01 + (c11 - c01) * fx;
+  return (top + (bot - top) * fy) * 2.0 - 1.0;
+}
+
+// grain + chromatic noise + photo-negative invert on display RGB —
+// mirrors applyDisplayEffects() in tone-math.js. (u, v) are frame-
+// normalized; fw, fh size the frame for the square-cell aspect fix.
+vec3 applyDisplayEffects(vec3 rgb, vec2 uv, float fw, float fh) {
+  float aspect = fh > 0.0 ? fh / fw : 1.0;
+  float vv = uv.y * aspect;
+
+  if (u_grainAmount != 0.0) {
+    float grid = ${f(EFFECTS.GRAIN_GRID_BASE)}
+      / pow(${f(EFFECTS.GRAIN_GRID_RANGE)}, u_grainSize);
+    float n1 = valueNoise(uv.x, vv, grid, 0u);
+    float n2 = valueNoise(uv.x, vv, grid * ${f(EFFECTS.GRAIN_OCTAVE2)}, 1u);
+    float rough = clamp(u_grainRoughness, 0.0, 1.0);
+    float mixA = ${f(EFFECTS.GRAIN_ROUGHNESS_MIX)} * rough;
+    float n = n1 * (1.0 - mixA) + n2 * mixA;
+    float y = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
+    float mid = pow(clamp(4.0 * y * (1.0 - y), 0.0, 1.0),
+      ${f(EFFECTS.GRAIN_MIDTONE)});
+    float d = u_grainAmount * ${f(EFFECTS.GRAIN_STRENGTH)} * n * mid;
+    rgb += d;
+  }
+
+  if (u_noise > 0.0) {
+    float grid = ${f(EFFECTS.NOISE_GRID)};
+    float amp = u_noise * ${f(EFFECTS.NOISE_STRENGTH)};
+    rgb += vec3(
+      valueNoise(uv.x, vv, grid, 2u),
+      valueNoise(uv.x, vv, grid, 3u),
+      valueNoise(uv.x, vv, grid, 4u)
+    ) * amp;
+  }
+
+  rgb = clamp(rgb, 0.0, 1.0);
+  if (u_invert > 0.5) rgb = vec3(1.0) - rgb;
+  return rgb;
+}
+
 // color mixer band centers in hue turns — mirrors HSL.CENTERS
 const float HSL_CENTERS[${HSL.CENTERS.length}] = float[${HSL.CENTERS.length}](
   ${HSL.CENTERS.map(f).join(", ")}
@@ -155,6 +242,16 @@ float textureDelta(float d, float w, float tau) {
       * sign(d) * max(abs(d) - tau, 0.0);
   }
   return (max(1.0 + u_texture * w, ${f(SPATIAL.TEXTURE_MIN_GAIN)}) - 1.0) * d;
+}
+
+// Finest-band soft-threshold coring for denoise — mirrors nrDelta() in
+// spatial.js. Returns shrink(d1) − d1 scaled by amount (the magnitude of a
+// negative NOISE slider); flats below the floor smooth, edges survive.
+float nrDelta(float d1, float amount) {
+  if (amount <= 0.0) return 0.0;
+  float a = abs(d1);
+  float shrunk = a <= ${f(NR.THRESH)} ? 0.0 : sign(d1) * (a - ${f(NR.THRESH)});
+  return amount * (shrunk - d1);
 }
 
 // Mask weight at one pixel — mirrors maskWeight() in mask-math.js.
@@ -281,10 +378,13 @@ void main() {
         ${f(SPATIAL.DEHAZE_T_MIN)});
       rgb = max((rgb - u_airlight) / t + u_airlight, 0.0);
     }
-    if (u_texture != 0.0 || u_clarity != 0.0) {
+    float nr = max(-u_noise, 0.0);
+    if (u_texture != 0.0 || u_clarity != 0.0 || nr > 0.0) {
       float y0 = pow(max(ySrc, 0.0), 1.0 / ${f(SPATIAL.GAMMA)});
       vec4 c = texelFetch(u_detail, p, 0);
       float delta = 0.0;
+      // denoise: soft-threshold the finest band (y0 − c1) only
+      if (nr > 0.0) delta += nrDelta(y0 - c.x, nr);
       if (u_texture != 0.0) {
         delta += textureDelta(y0 - c.x,
           ${f(SPATIAL.TEXTURE_WEIGHTS[0])}, ${f(SPATIAL.TEXTURE_THRESH[0])});
@@ -432,6 +532,12 @@ void main() {
     // 8. clamp + display encode
     display = srgbEncode(clamp(rgb, 0.0, 1.0));
   }
+
+  // EFFECTS: grain / chromatic noise / photo-negative invert on the final
+  // display-referred RGB — inlined identically to the post-step in
+  // toneMapRows (tone-math.js), keyed off frame-normalized coords so the
+  // preview and the export agree at any resolution.
+  display = applyDisplayEffects(display, v_uv, u_frame.x, u_frame.y);
 
   // mask visualization: tint the selected mask's coverage red
   // (preview-only — the CPU export has no counterpart on purpose)

@@ -40,6 +40,11 @@ const UNIFORMS = /** @type {const} */ ([
   "gradeHighLum",
   "gradeBlending",
   "gradeBalance",
+  "invert",
+  "grainAmount",
+  "grainSize",
+  "grainRoughness",
+  "noise",
 ]);
 
 /**

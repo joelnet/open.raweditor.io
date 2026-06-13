@@ -202,6 +202,64 @@ export const HSL_KEYS = /** @type {readonly SliderKey[]} */ (
 );
 
 /**
+ * EFFECTS section sliders: film GRAIN (Amount / Size / Roughness, Lightroom
+ * UX over darktable midtone-weighted luminance grain) and the bipolar NOISE
+ * slider (+ add chromatic noise / − wavelet denoise). The NEGATIVE toggle
+ * (photo-negative invert) is a bespoke button, not a slider — see
+ * EFFECTS_TOGGLE_KEY and buildEffects() in ui/effects.js.
+ * @type {readonly SliderDef[]}
+ */
+export const EFFECTS_SLIDERS = /** @type {const} */ ([
+  {
+    key: "grainAmount",
+    label: "GRAIN AMOUNT",
+    min: 0,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+    signed: false,
+  },
+  {
+    key: "grainSize",
+    label: "GRAIN SIZE",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
+    key: "grainRoughness",
+    label: "GRAIN ROUGHNESS",
+    min: 0,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+    signed: false,
+  },
+  {
+    key: "noise",
+    label: "NOISE",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+]);
+
+/** Store key for the NEGATIVE (invert) toggle — stored 0/1. */
+export const EFFECTS_TOGGLE_KEY = /** @type {SliderKey} */ ("invert");
+
+/** Every store key the EFFECTS section owns (for bypass zeroing). */
+export const EFFECTS_KEYS = /** @type {readonly SliderKey[]} */ ([
+  EFFECTS_TOGGLE_KEY,
+  ...EFFECTS_SLIDERS.map((d) => d.key),
+]);
+
+/**
  * Color grading zones (Lightroom 3-way): one color wheel (hue/sat) plus a
  * luminance slider per zone. Hues are stored in turns [0, 1), sats in [0, 1].
  * @typedef {{ label: string, hue: SliderKey, sat: SliderKey,
@@ -264,7 +322,7 @@ export const GRADE_KEYS = /** @type {readonly SliderKey[]} */ ([
  * swaps the default slider list for the color-grading wheel UI; `mixer`
  * swaps it for the per-band HSL color mixer UI.
  * @typedef {{ title: string, sliders: readonly SliderDef[], auto: boolean,
- *             grading?: boolean, mixer?: boolean }} Section
+ *             grading?: boolean, mixer?: boolean, effects?: boolean }} Section
  * @type {readonly Section[]}
  */
 export const SECTIONS = [
@@ -278,6 +336,12 @@ export const SECTIONS = [
     sliders: GRADE_SLIDERS,
     auto: false,
     grading: true,
+  },
+  {
+    title: "EFFECTS",
+    sliders: EFFECTS_SLIDERS,
+    auto: false,
+    effects: true,
   },
 ];
 

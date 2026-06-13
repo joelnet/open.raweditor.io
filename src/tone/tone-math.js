@@ -1,7 +1,14 @@
 // Pure-JS tone pipeline. The preview shader in gl/shaders.js implements the
 // exact same steps on the GPU; keep the two line-for-line in sync.
 
-import { TONE, GRADE, HSL, INPUT_TRANSFER, LUMA } from "./constants.js";
+import {
+  TONE,
+  GRADE,
+  HSL,
+  EFFECTS,
+  INPUT_TRANSFER,
+  LUMA,
+} from "./constants.js";
 import { prepareMask, maskWeight } from "./mask-math.js";
 import {
   ZERO_GEOMETRY,
@@ -35,6 +42,8 @@ import {
  *             gradeHighHue: number, gradeHighSat: number,
  *             gradeHighLum: number, gradeBlending: number,
  *             gradeBalance: number,
+ *             invert: number, grainAmount: number, grainSize: number,
+ *             grainRoughness: number, noise: number,
  *             masks: readonly import("./mask-math.js").Mask[]
  *           }} ToneSettings
  */
@@ -90,6 +99,12 @@ export const ZERO_SETTINGS = Object.freeze({
   // keeps ZERO_SETTINGS an identity transform.
   gradeBlending: 0.5,
   gradeBalance: 0,
+  // EFFECTS: identity — negative off, grain/noise off (0).
+  invert: 0,
+  grainAmount: 0,
+  grainSize: 0,
+  grainRoughness: 0,
+  noise: 0,
   masks: Object.freeze([]),
 });
 
@@ -117,6 +132,124 @@ export function srgbEncode(c) {
  */
 export function srgbDecode(c) {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+// --- shared display-referred post effects (grain / noise / invert) -------
+// These run after color grading on the final sRGB-encoded RGB and need the
+// pixel position, which applyTonePixel doesn't get. The shader inlines the
+// identical math in main() (using v_uv and u_frame); toneMapRows calls
+// applyDisplayEffects below with fx,fy,fw,fh. The hash and value noise are
+// kept in 32-bit unsigned integer arithmetic so JS (Math.imul + >>> 0) and
+// GLSL (uint) produce bit-identical results, and everything keys off
+// FRAME-normalized coordinates so the downscaled preview and the full-res
+// export show grain/noise of the same visual size — no time, no RNG.
+
+/**
+ * Integer hash of three 32-bit lanes → [0, 1). A small xorshift/multiply
+ * mix (IQ/Wang-style); `salt` decorrelates the grain octaves and the three
+ * chroma-noise channels. Must stay in uint arithmetic to match the shader.
+ * @param {number} x @param {number} y @param {number} salt
+ */
+function hash31(x, y, salt) {
+  let h = (x >>> 0) ^ Math.imul(y >>> 0, 0x9e3779b1);
+  h = (h >>> 0) ^ Math.imul(salt >>> 0, 0x85ebca77);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39) >>> 0;
+  h = (h ^ (h >>> 15)) >>> 0;
+  return h / 4294967296; // 2^32 → [0, 1)
+}
+
+/** smoothstep(0,1,t) — the value-noise interpolant. @param {number} t */
+function fade(t) {
+  const u = Math.min(Math.max(t, 0), 1);
+  return u * u * (3 - 2 * u);
+}
+
+/**
+ * Bilinearly-interpolated value noise in [-1, 1] at frame-normalized (u, v)
+ * on a `grid`-cell lattice. The four lattice corners are hashed by integer
+ * cell index, so any resolution sampling the same (u, v) hits the same
+ * cells — preview/export parity.
+ * @param {number} u @param {number} v frame-normalized [0, 1]
+ * @param {number} grid cells across the frame
+ * @param {number} salt octave/channel decorrelation
+ */
+function valueNoise(u, v, grid, salt) {
+  const gx = u * grid;
+  const gy = v * grid;
+  const x0 = Math.floor(gx);
+  const y0 = Math.floor(gy);
+  const fx = fade(gx - x0);
+  const fy = fade(gy - y0);
+  const c00 = hash31(x0, y0, salt);
+  const c10 = hash31(x0 + 1, y0, salt);
+  const c01 = hash31(x0, y0 + 1, salt);
+  const c11 = hash31(x0 + 1, y0 + 1, salt);
+  const top = c00 + (c10 - c00) * fx;
+  const bot = c01 + (c11 - c01) * fx;
+  return (top + (bot - top) * fy) * 2 - 1; // [0,1) → [-1, 1)
+}
+
+/**
+ * Apply grain, chromatic noise, and the photo-negative invert to one
+ * display-referred (sRGB-encoded) pixel. Inlined identically in the
+ * fragment shader; shared by toneMapRows and the unit tests so the three
+ * effects can never drift between the preview and the export.
+ * @param {number} r @param {number} g @param {number} b sRGB-encoded [0,1]
+ * @param {ToneSettings} s
+ * @param {number} u @param {number} v frame-normalized pixel coords [0,1]
+ * @param {number} fw @param {number} fh frame size in px (for aspect)
+ * @returns {[number, number, number]}
+ */
+export function applyDisplayEffects(r, g, b, s, u, v, fw, fh) {
+  // Keep cells square: stretch v by the frame aspect so a "cell" is the
+  // same physical size horizontally and vertically.
+  const aspect = fh > 0 ? fh / fw : 1;
+  const vv = v * aspect;
+
+  // grain: monochromatic luminance perturbation, midtone-weighted, with a
+  // second finer octave mixed in by Roughness (fractal value noise).
+  if (s.grainAmount !== 0) {
+    const grid =
+      EFFECTS.GRAIN_GRID_BASE / Math.pow(EFFECTS.GRAIN_GRID_RANGE, s.grainSize);
+    const n1 = valueNoise(u, vv, grid, 0);
+    const n2 = valueNoise(u, vv, grid * EFFECTS.GRAIN_OCTAVE2, 1);
+    const rough = Math.min(Math.max(s.grainRoughness, 0), 1);
+    const mix = EFFECTS.GRAIN_ROUGHNESS_MIX * rough;
+    const n = n1 * (1 - mix) + n2 * mix;
+    // midtone bias on display luma — fades the grain in shadows/highlights
+    const y = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
+    const mid = Math.pow(
+      Math.min(Math.max(4 * y * (1 - y), 0), 1),
+      EFFECTS.GRAIN_MIDTONE,
+    );
+    const d = s.grainAmount * EFFECTS.GRAIN_STRENGTH * n * mid;
+    r += d;
+    g += d;
+    b += d;
+  }
+
+  // noise (positive half of the bipolar slider): fine, per-channel chromatic
+  // noise. Negative noise is denoise and runs in the presence prepass.
+  if (s.noise > 0) {
+    const grid = EFFECTS.NOISE_GRID;
+    const amp = s.noise * EFFECTS.NOISE_STRENGTH;
+    r += valueNoise(u, vv, grid, 2) * amp;
+    g += valueNoise(u, vv, grid, 3) * amp;
+    b += valueNoise(u, vv, grid, 4) * amp;
+  }
+
+  r = Math.min(Math.max(r, 0), 1);
+  g = Math.min(Math.max(g, 0), 1);
+  b = Math.min(Math.max(b, 0), 1);
+
+  // invert: display-referred photo negative — always the final operation.
+  if (s.invert) {
+    r = 1 - r;
+    g = 1 - g;
+    b = 1 - b;
+  }
+  return [r, g, b];
 }
 
 /**
@@ -649,7 +782,20 @@ export function toneMapRows(
           weights[j] = maskWeight(prepared[j], fx, fy);
         }
       }
-      const [or, og, ob] = applyTonePixel(r, g, b, settings, weights);
+      let [or, og, ob] = applyTonePixel(r, g, b, settings, weights);
+      // Shared display-referred post-step (grain / noise / invert), keyed
+      // off frame-normalized coords so it matches the GPU preview at any
+      // resolution — inlined identically in the fragment shader's main().
+      [or, og, ob] = applyDisplayEffects(
+        or,
+        og,
+        ob,
+        settings,
+        fx / fw,
+        fy / fh,
+        fw,
+        fh,
+      );
       out[dst] = or * outMax + outBias;
       out[dst + 1] = og * outMax + outBias;
       out[dst + 2] = ob * outMax + outBias;
