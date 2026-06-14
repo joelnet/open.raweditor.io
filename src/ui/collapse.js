@@ -8,6 +8,9 @@
 /** Section classes that must stay open and get no collapse toggle. */
 const ALWAYS_OPEN = ["section-export", "section-revert", "section-install"];
 
+/** Section titles that start expanded (still collapsible). */
+const DEFAULT_OPEN = new Set(["HISTOGRAM", "WHITE BALANCE", "TONE"]);
+
 /**
  * @param {HTMLElement} container the scroll column holding the .section list
  */
@@ -38,7 +41,7 @@ export function initCollapse(container) {
     toggle.type = "button";
     toggle.className = "section-collapse";
 
-    section.classList.add("collapsed"); // collapsed by default
+    if (!DEFAULT_OPEN.has(title)) section.classList.add("collapsed");
 
     const sync = () => {
       const collapsed = section.classList.contains("collapsed");
