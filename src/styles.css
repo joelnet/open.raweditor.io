@@ -544,6 +544,13 @@ button:disabled {
     margin: -8px -8px -8px 0;
   }
 
+  .section-collapse {
+    width: 32px;
+    height: 32px;
+    margin: -8px -2px -8px -8px;
+    font-size: 19px;
+  }
+
   .slider-row input[type="range"] {
     height: 36px; /* taller track hit area — easier to grab mid-drag */
   }
@@ -622,6 +629,49 @@ button:disabled {
   letter-spacing: 0.1em;
   font-size: 12px;
   border-bottom: 1px solid var(--panel-edge);
+}
+
+/* ---- collapse toggle: +/- at the left of a section header ---- */
+
+.section-collapse {
+  flex: 0 0 auto;
+  order: -1; /* always first, left of the title */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin: -2px -4px -2px -4px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.section-collapse:hover {
+  color: var(--text);
+}
+
+/* keep the title hugging the toggle; push AUTO/eye flush right */
+.section-title {
+  margin-right: auto;
+}
+
+.section.collapsed {
+  padding-bottom: 0;
+}
+
+.section.collapsed > .section-header {
+  border-bottom-color: transparent;
+}
+
+.section.collapsed > :not(.section-header) {
+  display: none;
 }
 
 /* ---- per-section auto: one-click computed settings for the section ---- */

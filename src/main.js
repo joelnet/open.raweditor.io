@@ -14,6 +14,7 @@ import { initZoom } from "./ui/zoom.js";
 import { initDropzone } from "./ui/dropzone.js";
 import { initDivider } from "./ui/divider.js";
 import { initElevator } from "./ui/elevator.js";
+import { initCollapse } from "./ui/collapse.js";
 import { createStatus } from "./ui/status.js";
 import { createExporter, downloadBlob } from "./export/export.js";
 import { initPwaUpdates } from "./pwa.js";
@@ -312,6 +313,9 @@ const dropzone = initDropzone({
   onReject: (name) =>
     status.setError(`${name} is not a supported RAW file (.ARW, .RAF, .DNG)`),
 });
+// Collapse every section by default (except EXPORT / REVERT) — runs after all
+// sections (histogram, crop, masks, and the panel sections) are in the DOM.
+initCollapse(panelScroll);
 initDivider({ onResize: layout });
 initElevator();
 
