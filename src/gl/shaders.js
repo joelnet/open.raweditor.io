@@ -23,6 +23,16 @@ import {
 /** @param {number} n */
 const f = (n) => n.toFixed(6);
 
+// Simplex tables (darktable grain.c) interpolated into the GLSL so the
+// shader and tone-math.js share one source: perm as ints, grad3 as vec3s,
+// per-octave frequencies/amplitudes as floats.
+const SIMPLEX_PERM_GLSL = EFFECTS.SIMPLEX_PERM.join(", ");
+const SIMPLEX_GRAD3_GLSL = EFFECTS.SIMPLEX_GRAD3.map(
+  (g) => `vec3(${g[0].toFixed(1)}, ${g[1].toFixed(1)}, ${g[2].toFixed(1)})`,
+).join(", ");
+const GRAIN_OCTAVE_F_GLSL = EFFECTS.GRAIN_OCTAVE_F.map(f).join(", ");
+const GRAIN_OCTAVE_A_GLSL = EFFECTS.GRAIN_OCTAVE_A.map(f).join(", ");
+
 export const VERTEX_SHADER = `#version 300 es
 // Bufferless fullscreen triangle; v_uv y-flipped so texel row 0 (image top)
 // lands at the top of the canvas, then windowed by the view rect so zoom
@@ -87,8 +97,8 @@ uniform float u_gradeBalance;   // [-1, 1]
 // EFFECTS: display-referred post-step (grain / noise / invert)
 uniform float u_invert;         // 0 or 1 (photo negative)
 uniform float u_grainAmount;    // [-1, 1] (only the magnitude matters)
-uniform float u_grainSize;      // [-1, 1]
-uniform float u_grainRoughness; // [-1, 1] (used as [0, 1])
+uniform float u_grainSize;      // [-1, 1] (coarseness)
+uniform float u_grainMidtones;  // [0, 1] — darktable midtones bias (×100)
 uniform float u_noise;          // [-1, 1] — positive adds chromatic noise
 
 // Presence aux, computed per image by spatial-worker.js (slider moves stay
@@ -196,6 +206,79 @@ float valueNoise(float u, float v, float grid, uint salt) {
   return (top + (bot - top) * fy) * 2.0 - 1.0;
 }
 
+// darktable grain.c: 3D simplex noise (canonical Perlin tables) + the
+// photographic paper-response curve. Mirrors simplexNoise()/simplex2dNoise()/
+// paperResp()/paperRespInverse() in tone-math.js, line for line. The
+// 256-entry permutation is indexed with & 255 (the doubled 512 table reduces
+// to this: perm512[n] == perm[n & 255]).
+const int simplexPerm[256] = int[256](${SIMPLEX_PERM_GLSL});
+const vec3 simplexGrad3[12] = vec3[12](${SIMPLEX_GRAD3_GLSL});
+
+float simplexNoise(float xin, float yin, float zin) {
+  float F3 = ${f(EFFECTS.SIMPLEX_F3)};
+  float G3 = ${f(EFFECTS.SIMPLEX_G3)};
+  float s = (xin + yin + zin) * F3;
+  int i = int(floor(xin + s));
+  int j = int(floor(yin + s));
+  int k = int(floor(zin + s));
+  float t = float(i + j + k) * G3;
+  float x0 = xin - (float(i) - t);
+  float y0 = yin - (float(j) - t);
+  float z0 = zin - (float(k) - t);
+  int i1, j1, k1, i2, j2, k2;
+  if (x0 >= y0) {
+    if (y0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+    else if (x0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 0; k2 = 1; }
+    else { i1 = 0; j1 = 0; k1 = 1; i2 = 1; j2 = 0; k2 = 1; }
+  } else {
+    if (y0 < z0) { i1 = 0; j1 = 0; k1 = 1; i2 = 0; j2 = 1; k2 = 1; }
+    else if (x0 < z0) { i1 = 0; j1 = 1; k1 = 0; i2 = 0; j2 = 1; k2 = 1; }
+    else { i1 = 0; j1 = 1; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+  }
+  float x1 = x0 - float(i1) + G3, y1 = y0 - float(j1) + G3, z1 = z0 - float(k1) + G3;
+  float x2 = x0 - float(i2) + 2.0 * G3, y2 = y0 - float(j2) + 2.0 * G3, z2 = z0 - float(k2) + 2.0 * G3;
+  float x3 = x0 - 1.0 + 3.0 * G3, y3 = y0 - 1.0 + 3.0 * G3, z3 = z0 - 1.0 + 3.0 * G3;
+  int ii = i & 255, jj = j & 255, kk = k & 255;
+  int gi0 = simplexPerm[(ii + simplexPerm[(jj + simplexPerm[kk]) & 255]) & 255] % 12;
+  int gi1 = simplexPerm[(ii + i1 + simplexPerm[(jj + j1 + simplexPerm[(kk + k1) & 255]) & 255]) & 255] % 12;
+  int gi2 = simplexPerm[(ii + i2 + simplexPerm[(jj + j2 + simplexPerm[(kk + k2) & 255]) & 255]) & 255] % 12;
+  int gi3 = simplexPerm[(ii + 1 + simplexPerm[(jj + 1 + simplexPerm[(kk + 1) & 255]) & 255]) & 255] % 12;
+  float n0 = 0.0, n1 = 0.0, n2 = 0.0, n3 = 0.0;
+  float t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+  if (t0 > 0.0) { t0 *= t0; n0 = t0 * t0 * dot(simplexGrad3[gi0], vec3(x0, y0, z0)); }
+  float t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+  if (t1 > 0.0) { t1 *= t1; n1 = t1 * t1 * dot(simplexGrad3[gi1], vec3(x1, y1, z1)); }
+  float t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+  if (t2 > 0.0) { t2 *= t2; n2 = t2 * t2 * dot(simplexGrad3[gi2], vec3(x2, y2, z2)); }
+  float t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+  if (t3 > 0.0) { t3 *= t3; n3 = t3 * t3 * dot(simplexGrad3[gi3], vec3(x3, y3, z3)); }
+  return 32.0 * (n0 + n1 + n2 + n3);
+}
+
+float simplex2dNoise(float x, float y, float zoom) {
+  float fF[3] = float[3](${GRAIN_OCTAVE_F_GLSL});
+  float fA[3] = float[3](${GRAIN_OCTAVE_A_GLSL});
+  float total = 0.0;
+  for (int o = 0; o < 3; o++) {
+    total += simplexNoise(x * fF[o] / zoom, y * fF[o] / zoom, float(o)) * fA[o];
+  }
+  return total;
+}
+
+float paperResp(float exposure, float mb, float gp) {
+  float delta = ${f(EFFECTS.GRAIN_LUT_DELTA_MAX)}
+    * exp((mb / 100.0) * log(${f(EFFECTS.GRAIN_LUT_DELTA_MIN)}));
+  return (1.0 + 2.0 * delta)
+    / (1.0 + exp((4.0 * gp * (0.5 - exposure)) / (1.0 + 2.0 * delta))) - delta;
+}
+
+float paperRespInverse(float density, float mb, float gp) {
+  float delta = ${f(EFFECTS.GRAIN_LUT_DELTA_MAX)}
+    * exp((mb / 100.0) * log(${f(EFFECTS.GRAIN_LUT_DELTA_MIN)}));
+  return (-log((1.0 + 2.0 * delta) / (density + delta) - 1.0) * (1.0 + 2.0 * delta))
+    / (4.0 * gp) + 0.5;
+}
+
 // grain + chromatic noise + photo-negative invert on display RGB —
 // mirrors applyDisplayEffects() in tone-math.js. (u, v) are frame-
 // normalized; fw, fh size the frame for the square-cell aspect fix.
@@ -203,19 +286,23 @@ vec3 applyDisplayEffects(vec3 rgb, vec2 uv, float fw, float fh) {
   float aspect = fh > 0.0 ? fh / fw : 1.0;
   float vv = uv.y * aspect;
 
-  if (u_grainAmount != 0.0) {
-    float grid = ${f(EFFECTS.GRAIN_GRID_BASE)}
-      / pow(${f(EFFECTS.GRAIN_GRID_RANGE)}, u_grainSize);
-    float n1 = valueNoise(uv.x, vv, grid, 0u);
-    float n2 = valueNoise(uv.x, vv, grid * ${f(EFFECTS.GRAIN_OCTAVE2)}, 1u);
-    float rough = clamp(u_grainRoughness, 0.0, 1.0);
-    float mixA = ${f(EFFECTS.GRAIN_ROUGHNESS_MIX)} * rough;
-    float n = n1 * (1.0 - mixA) + n2 * mixA;
-    float y = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
-    float mid = pow(clamp(4.0 * y * (1.0 - y), 0.0, 1.0),
-      ${f(EFFECTS.GRAIN_MIDTONE)});
-    float d = u_grainAmount * ${f(EFFECTS.GRAIN_STRENGTH)} * n * mid;
-    rgb += d;
+  if (u_grainAmount > 0.0) {
+    float minWH = max(min(fw, fh), 1.0);
+    float gx = uv.x * fw / minWH;
+    float gy = uv.y * fh / minWH;
+    float iso = ${f(EFFECTS.GRAIN_ISO_BASE)}
+      * pow(${f(EFFECTS.GRAIN_ISO_OCTAVE)}, u_grainSize);
+    float zoom = (1.0 + 8.0 * (iso / ${f(EFFECTS.GRAIN_SCALE_FACTOR)}) / 100.0)
+      / 800.0;
+    float gnoise = simplex2dNoise(gx, gy, zoom);
+    float gu = clamp(gnoise * u_grainAmount
+      * ${f(EFFECTS.GRAIN_LIGHTNESS_STRENGTH_SCALE)}, -0.5, 0.5);
+    float mb = u_grainMidtones * 100.0;
+    float gp = ${f(EFFECTS.GRAIN_PAPER_GAMMA)};
+    float l = clamp(dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])})),
+      0.0, 1.0);
+    float d = paperResp(gu + paperRespInverse(l, mb, gp), mb, gp) - l;
+    rgb += vec3(d);
   }
 
   if (u_noise > 0.0) {

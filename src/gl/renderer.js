@@ -43,7 +43,7 @@ const UNIFORMS = /** @type {const} */ ([
   "invert",
   "grainAmount",
   "grainSize",
-  "grainRoughness",
+  "grainMidtones",
   "noise",
 ]);
 

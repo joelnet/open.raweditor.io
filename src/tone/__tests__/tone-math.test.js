@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TONE, EFFECTS } from "../constants.js";
+import { TONE } from "../constants.js";
 import {
   ZERO_SETTINGS,
   applyTonePixel,
@@ -645,21 +645,37 @@ test("grain: zero amount is identity, nonzero perturbs but stays in [0,1]", () =
   assert.ok(moved, "grain must perturb some positions");
 });
 
-test("grain: midtone bias fades grain at black and white", () => {
-  const s = settings({ grainAmount: 1 });
-  // pure black and white have midtone weight 0, so grain can't move them
-  for (const v of [0, 1]) {
-    for (let i = 0; i < 20; i++) {
-      const out = applyDisplayEffects(v, v, v, s, i / 20, 0.4, 800, 600);
-      assert.ok(Math.abs(out[0] - v) < EPS, `v=${v} i=${i}`);
+test("grain: midtone bias suppresses grain at black & white (paper response)", () => {
+  const s = settings({ grainAmount: 1 }); // grainMidtones defaults to mb=100
+  let mid = 0;
+  let extreme = 0;
+  for (let i = 0; i < 60; i++) {
+    const u = i / 60;
+    for (const v of [0.25, 0.5, 0.75]) {
+      mid = Math.max(
+        mid,
+        Math.abs(
+          applyDisplayEffects(0.5, 0.5, 0.5, s, u, v, 800, 600)[0] - 0.5,
+        ),
+      );
+      extreme = Math.max(
+        extreme,
+        Math.abs(applyDisplayEffects(0, 0, 0, s, u, v, 800, 600)[0]),
+        Math.abs(applyDisplayEffects(1, 1, 1, s, u, v, 800, 600)[0] - 1),
+      );
     }
   }
+  // darktable's paper-response curve concentrates grain in the midtones and
+  // nearly eliminates it at the toe and shoulder — not a hard window (so not
+  // exactly zero), but orders of magnitude down
+  assert.ok(mid > 0.02, `grain visible in midtones (${mid})`);
+  assert.ok(extreme < mid * 0.05, `extremes (${extreme}) << midtones (${mid})`);
 });
 
 test("grain: deterministic and resolution-independent (preview == export)", () => {
   // same frame-normalized coordinate must yield the same grain regardless
   // of resolution — the preview/export parity guarantee
-  const s = settings({ grainAmount: 0.8, grainSize: 0.2, grainRoughness: 0.5 });
+  const s = settings({ grainAmount: 0.8, grainSize: 0.2, grainMidtones: 0.5 });
   for (const u of [0.12, 0.5, 0.83]) {
     for (const v of [0.2, 0.77]) {
       const a = applyDisplayEffects(0.5, 0.5, 0.5, s, u, v, 600, 400);
@@ -706,13 +722,14 @@ test("noise: positive is chromatic (channels differ), negative adds nothing here
   }
 });
 
-test("grain max strength bounded by GRAIN_STRENGTH at midtones", () => {
-  // at full amount, no roughness, the perturbation magnitude can't exceed
-  // GRAIN_STRENGTH (value noise in [-1,1], midtone weight ≤ 1)
+test("grain: midtone perturbation stays bounded (grain-unit clamp)", () => {
+  // the grain unit is clamped to ±0.5 before the paper response, so even at
+  // full Amount the delta at a midtone can't exceed ~0.39 (paper_resp(1)−0.5)
   const s = settings({ grainAmount: 1 });
   for (let i = 0; i < 100; i++) {
     const out = applyDisplayEffects(0.5, 0.5, 0.5, s, i / 100, 0.5, 500, 500);
-    assert.ok(Math.abs(out[0] - 0.5) <= EFFECTS.GRAIN_STRENGTH + EPS);
+    assert.ok(out[0] >= 0 && out[0] <= 1);
+    assert.ok(Math.abs(out[0] - 0.5) <= 0.39, `unbounded grain: ${out[0]}`);
   }
 });
 

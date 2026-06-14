@@ -187,41 +187,78 @@ export const INPUT_TRANSFER = "linear";
  *     "Linear Invert" would un-gamma-correct first and look wrong as a
  *     negative). The toggle is stored as 0/1 for uniform compatibility.
  *
- *   grain — monochromatic LUMINANCE grain with darktable's midtone bias
- *     (its grain module fades the perturbation in shadows and highlights so
- *     the toe and shoulder stay clean), driven by Lightroom's
- *     Amount/Size/Roughness controls. Grain is a deterministic function of
- *     frame-normalized cell coordinates (an integer hash → value noise), so
- *     a downscaled preview and a full-res export show grain of the same
- *     visual size and character — no time, no RNG.
+ *   grain — a faithful port of darktable's grain module (src/iop/grain.c):
+ *     three octaves of 3D simplex noise (the canonical Perlin/Gustavson
+ *     tables) added to LIGHTNESS through darktable's photographic
+ *     paper-response curve, which is what biases the grain toward the
+ *     midtones. Controls map to darktable's: Amount→strength,
+ *     Size→coarseness (an ISO-like zoom on the noise), Midtones→midtones
+ *     bias. The noise is sampled at frame-normalized coordinates (x = px /
+ *     min(w,h), exactly darktable's wx/wd) so a downscaled preview and a
+ *     full-res export show the same grain field — no time, no RNG.
  *
  *   noise (positive half of the bipolar slider) — fine CHROMATIC digital
  *     noise (independent per channel, ~1 cell), the additive side of the
  *     RawTherapee/GIMP "add noise" operators, kept distinct from the mono
- *     grain. The negative half is wavelet-shrinkage denoise and lives in the
- *     presence prepass (see SPATIAL.NR_*), not here.
+ *     grain (this stays value noise — real sensor noise is per-pixel). The
+ *     negative half is wavelet-shrinkage denoise and lives in the presence
+ *     prepass (see SPATIAL.NR_*), not here.
  */
 export const EFFECTS = {
-  /** Grain cells across the frame's long edge at Size 0 (Lightroom's
-   *  default grain is fairly fine; Size scales this down toward coarser
-   *  clumps). darktable scales grain by an ISO-like coarseness; we expose
-   *  it as a cell count so preview and export share one normalized grid. */
-  GRAIN_GRID_BASE: 900,
-  /** Size slider 1 multiplies the cell size by this (fewer, larger cells);
-   *  Size −1 divides by it (finer). Geometric so 0 is the neutral middle. */
-  GRAIN_GRID_RANGE: 3.0,
-  /** Amount 1 perturbs display luma by ±GRAIN_STRENGTH at the midtones
-   *  (before the midtone falloff), in sRGB-encoded units. */
-  GRAIN_STRENGTH: 0.18,
-  /** Roughness 1 routes this fraction of the grain through a second, finer
-   *  octave (fractal value noise), making the grain less uniform — the
-   *  open-source "roughness/octave mix" knob. */
-  GRAIN_ROUGHNESS_MIX: 0.6,
-  /** Finer octave's grid multiplier relative to the base grain grid. */
-  GRAIN_OCTAVE2: 2.7,
-  /** Midtone-bias exponent: weight = (4·y·(1−y))^GRAIN_MIDTONE so grain
-   *  peaks at mid display luma and fades to nothing at 0 and 1. */
-  GRAIN_MIDTONE: 0.7,
+  // --- film grain: darktable grain.c, verbatim constants ---
+  /** darktable maps coarseness to an ISO-like value; Size 0 sits at its
+   *  default (ISO 1600) and ±1 scales the ISO by GRAIN_ISO_OCTAVE. */
+  GRAIN_ISO_BASE: 1600,
+  GRAIN_ISO_OCTAVE: 4,
+  /** scale = ISO / GRAIN_SCALE_FACTOR, then zoom = (1 + 8·scale/100)/800. */
+  GRAIN_SCALE_FACTOR: 213.2,
+  /** Per-octave frequency multipliers / amplitudes — _simplex_2d_noise(). */
+  GRAIN_OCTAVE_F: [0.491, 0.9441, 1.728],
+  GRAIN_OCTAVE_A: [0.234, 0.785, 1.215],
+  /** noise·strength → grain-unit before the paper-response lookup. */
+  GRAIN_LIGHTNESS_STRENGTH_SCALE: 0.15,
+  /** Paper-response model (paper_resp / evaluate_grain_lut). */
+  GRAIN_LUT_DELTA_MAX: 2.0,
+  GRAIN_LUT_DELTA_MIN: 0.0001,
+  GRAIN_PAPER_GAMMA: 1.0,
+  /** Simplex skew/unskew factors (F3, G3 in grain.c). */
+  SIMPLEX_F3: 1 / 3,
+  SIMPLEX_G3: 1 / 6,
+  /** Canonical Perlin gradient table (12 mid-edge directions of a cube). */
+  SIMPLEX_GRAD3: [
+    [1, 1, 0],
+    [-1, 1, 0],
+    [1, -1, 0],
+    [-1, -1, 0],
+    [1, 0, 1],
+    [-1, 0, 1],
+    [1, 0, -1],
+    [-1, 0, -1],
+    [0, 1, 1],
+    [0, -1, 1],
+    [0, 1, -1],
+    [0, -1, -1],
+  ],
+  /** Canonical Ken Perlin permutation (256). Indexed with & 255 in place of
+   *  the doubled 512-entry table (perm512[n] === perm[n & 255]). */
+  SIMPLEX_PERM: [
+    151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140,
+    36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148, 247, 120,
+    234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32, 57, 177, 33,
+    88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175, 74, 165, 71,
+    134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133,
+    230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161,
+    1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169, 200, 196, 135, 130,
+    116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250,
+    124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212, 207, 206, 59, 227,
+    47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119, 248, 152, 2, 44,
+    154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9, 129, 22, 39, 253, 19, 98,
+    108, 110, 79, 113, 224, 232, 178, 185, 112, 104, 218, 246, 97, 228, 251, 34,
+    242, 193, 238, 210, 144, 12, 191, 179, 162, 241, 81, 51, 145, 235, 249, 14,
+    239, 107, 49, 192, 214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121,
+    50, 45, 127, 4, 150, 254, 138, 236, 205, 93, 222, 114, 67, 29, 24, 72, 243,
+    141, 128, 195, 78, 66, 215, 61, 156, 180,
+  ],
   /** Chromatic noise (positive NOISE slider) cells across the long edge —
    *  near one cell per pixel at preview scale, i.e. very fine. */
   NOISE_GRID: 1400,

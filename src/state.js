@@ -202,9 +202,10 @@ export const HSL_KEYS = /** @type {readonly SliderKey[]} */ (
 );
 
 /**
- * EFFECTS section sliders: film GRAIN (Amount / Size / Roughness, Lightroom
- * UX over darktable midtone-weighted luminance grain) and the bipolar NOISE
- * slider (+ add chromatic noise / − wavelet denoise). The NEGATIVE toggle
+ * EFFECTS section sliders: film GRAIN (Amount / Size / Midtones — a port of
+ * darktable's grain module: strength / coarseness / midtones-bias) and the
+ * bipolar NOISE slider (+ add chromatic noise / − wavelet denoise). The
+ * NEGATIVE toggle
  * (photo-negative invert) is a bespoke button, not a slider — see
  * EFFECTS_TOGGLE_KEY and buildEffects() in ui/effects.js.
  * @type {readonly SliderDef[]}
@@ -230,13 +231,14 @@ export const EFFECTS_SLIDERS = /** @type {const} */ ([
     decimals: 0,
   },
   {
-    key: "grainRoughness",
-    label: "GRAIN ROUGHNESS",
+    key: "grainMidtones",
+    label: "GRAIN MIDTONES",
     min: 0,
     max: 100,
     step: 1,
     scale: 0.01,
     decimals: 0,
+    reset: 100,
     signed: false,
   },
   {

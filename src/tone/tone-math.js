@@ -43,7 +43,7 @@ import {
  *             gradeHighLum: number, gradeBlending: number,
  *             gradeBalance: number,
  *             invert: number, grainAmount: number, grainSize: number,
- *             grainRoughness: number, noise: number,
+ *             grainMidtones: number, noise: number,
  *             masks: readonly import("./mask-math.js").Mask[]
  *           }} ToneSettings
  */
@@ -103,7 +103,9 @@ export const ZERO_SETTINGS = Object.freeze({
   invert: 0,
   grainAmount: 0,
   grainSize: 0,
-  grainRoughness: 0,
+  // midtones-bias default 100 (darktable's default) — only shapes grain
+  // when Amount > 0, so this stays an identity setting
+  grainMidtones: 1,
   noise: 0,
   masks: Object.freeze([]),
 });
@@ -190,6 +192,168 @@ function valueNoise(u, v, grid, salt) {
   return (top + (bot - top) * fy) * 2 - 1; // [0,1) → [-1, 1)
 }
 
+// --- film grain: a faithful port of darktable's grain module
+//     (src/iop/grain.c). Mirrored verbatim in gl/shaders.js. ---
+
+/**
+ * 3D simplex noise in ~[-1, 1] — the canonical Perlin/Gustavson algorithm
+ * darktable's grain uses (_simplex_noise). The 256-entry permutation is
+ * indexed with `& 255` in place of the doubled 512-entry table, exactly as
+ * the GLSL mirror does, so the two never diverge.
+ * @param {number} xin @param {number} yin @param {number} zin
+ */
+function simplexNoise(xin, yin, zin) {
+  const F3 = EFFECTS.SIMPLEX_F3;
+  const G3 = EFFECTS.SIMPLEX_G3;
+  const P = EFFECTS.SIMPLEX_PERM;
+  const G = EFFECTS.SIMPLEX_GRAD3;
+  const s = (xin + yin + zin) * F3;
+  const i = Math.floor(xin + s);
+  const j = Math.floor(yin + s);
+  const k = Math.floor(zin + s);
+  const t = (i + j + k) * G3;
+  const x0 = xin - (i - t);
+  const y0 = yin - (j - t);
+  const z0 = zin - (k - t);
+  let i1, j1, k1, i2, j2, k2;
+  if (x0 >= y0) {
+    if (y0 >= z0) {
+      i1 = 1;
+      j1 = 0;
+      k1 = 0;
+      i2 = 1;
+      j2 = 1;
+      k2 = 0;
+    } else if (x0 >= z0) {
+      i1 = 1;
+      j1 = 0;
+      k1 = 0;
+      i2 = 1;
+      j2 = 0;
+      k2 = 1;
+    } else {
+      i1 = 0;
+      j1 = 0;
+      k1 = 1;
+      i2 = 1;
+      j2 = 0;
+      k2 = 1;
+    }
+  } else {
+    if (y0 < z0) {
+      i1 = 0;
+      j1 = 0;
+      k1 = 1;
+      i2 = 0;
+      j2 = 1;
+      k2 = 1;
+    } else if (x0 < z0) {
+      i1 = 0;
+      j1 = 1;
+      k1 = 0;
+      i2 = 0;
+      j2 = 1;
+      k2 = 1;
+    } else {
+      i1 = 0;
+      j1 = 1;
+      k1 = 0;
+      i2 = 1;
+      j2 = 1;
+      k2 = 0;
+    }
+  }
+  const x1 = x0 - i1 + G3,
+    y1 = y0 - j1 + G3,
+    z1 = z0 - k1 + G3;
+  const x2 = x0 - i2 + 2 * G3,
+    y2 = y0 - j2 + 2 * G3,
+    z2 = z0 - k2 + 2 * G3;
+  const x3 = x0 - 1 + 3 * G3,
+    y3 = y0 - 1 + 3 * G3,
+    z3 = z0 - 1 + 3 * G3;
+  const ii = i & 255,
+    jj = j & 255,
+    kk = k & 255;
+  const gi0 = P[(ii + P[(jj + P[kk]) & 255]) & 255] % 12;
+  const gi1 = P[(ii + i1 + P[(jj + j1 + P[(kk + k1) & 255]) & 255]) & 255] % 12;
+  const gi2 = P[(ii + i2 + P[(jj + j2 + P[(kk + k2) & 255]) & 255]) & 255] % 12;
+  const gi3 = P[(ii + 1 + P[(jj + 1 + P[(kk + 1) & 255]) & 255]) & 255] % 12;
+  let n0 = 0,
+    n1 = 0,
+    n2 = 0,
+    n3 = 0;
+  let t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+  if (t0 > 0) {
+    t0 *= t0;
+    n0 = t0 * t0 * (G[gi0][0] * x0 + G[gi0][1] * y0 + G[gi0][2] * z0);
+  }
+  let t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+  if (t1 > 0) {
+    t1 *= t1;
+    n1 = t1 * t1 * (G[gi1][0] * x1 + G[gi1][1] * y1 + G[gi1][2] * z1);
+  }
+  let t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+  if (t2 > 0) {
+    t2 *= t2;
+    n2 = t2 * t2 * (G[gi2][0] * x2 + G[gi2][1] * y2 + G[gi2][2] * z2);
+  }
+  let t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+  if (t3 > 0) {
+    t3 *= t3;
+    n3 = t3 * t3 * (G[gi3][0] * x3 + G[gi3][1] * y3 + G[gi3][2] * z3);
+  }
+  return 32 * (n0 + n1 + n2 + n3);
+}
+
+/**
+ * Three octaves of simplex noise at a given zoom — _simplex_2d_noise() in
+ * grain.c (fixed per-octave frequencies/amplitudes, octave index as the z
+ * slice so the octaves decorrelate).
+ * @param {number} x @param {number} y @param {number} zoom
+ */
+function simplex2dNoise(x, y, zoom) {
+  const F = EFFECTS.GRAIN_OCTAVE_F;
+  const A = EFFECTS.GRAIN_OCTAVE_A;
+  let total = 0;
+  for (let o = 0; o < 3; o++) {
+    total += simplexNoise((x * F[o]) / zoom, (y * F[o]) / zoom, o) * A[o];
+  }
+  return total;
+}
+
+/**
+ * darktable paper_resp(): the photographic density response (a logistic in
+ * exposure). `mb` is the midtones-bias 0–100; `gp` the paper gamma.
+ * @param {number} exposure @param {number} mb @param {number} gp
+ */
+function paperResp(exposure, mb, gp) {
+  const delta =
+    EFFECTS.GRAIN_LUT_DELTA_MAX *
+    Math.exp((mb / 100) * Math.log(EFFECTS.GRAIN_LUT_DELTA_MIN));
+  return (
+    (1 + 2 * delta) /
+      (1 + Math.exp((4 * gp * (0.5 - exposure)) / (1 + 2 * delta))) -
+    delta
+  );
+}
+
+/**
+ * Inverse of paperResp (solve for exposure given a density) — grain.c
+ * paper_resp_inverse().
+ * @param {number} density @param {number} mb @param {number} gp
+ */
+function paperRespInverse(density, mb, gp) {
+  const delta =
+    EFFECTS.GRAIN_LUT_DELTA_MAX *
+    Math.exp((mb / 100) * Math.log(EFFECTS.GRAIN_LUT_DELTA_MIN));
+  return (
+    (-Math.log((1 + 2 * delta) / (density + delta) - 1) * (1 + 2 * delta)) /
+      (4 * gp) +
+    0.5
+  );
+}
+
 /**
  * Apply grain, chromatic noise, and the photo-negative invert to one
  * display-referred (sRGB-encoded) pixel. Inlined identically in the
@@ -207,23 +371,30 @@ export function applyDisplayEffects(r, g, b, s, u, v, fw, fh) {
   const aspect = fh > 0 ? fh / fw : 1;
   const vv = v * aspect;
 
-  // grain: monochromatic luminance perturbation, midtone-weighted, with a
-  // second finer octave mixed in by Roughness (fractal value noise).
-  if (s.grainAmount !== 0) {
-    const grid =
-      EFFECTS.GRAIN_GRID_BASE / Math.pow(EFFECTS.GRAIN_GRID_RANGE, s.grainSize);
-    const n1 = valueNoise(u, vv, grid, 0);
-    const n2 = valueNoise(u, vv, grid * EFFECTS.GRAIN_OCTAVE2, 1);
-    const rough = Math.min(Math.max(s.grainRoughness, 0), 1);
-    const mix = EFFECTS.GRAIN_ROUGHNESS_MIX * rough;
-    const n = n1 * (1 - mix) + n2 * mix;
-    // midtone bias on display luma — fades the grain in shadows/highlights
-    const y = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
-    const mid = Math.pow(
-      Math.min(Math.max(4 * y * (1 - y), 0), 1),
-      EFFECTS.GRAIN_MIDTONE,
+  // grain: darktable grain.c — 3 octaves of simplex noise on lightness,
+  // shaped by the paper-response curve (midtone bias). Coordinates are
+  // px/min(w,h) (darktable's wx/wd) so the preview and the export sample the
+  // same continuous noise field. Applied as an equal add to R/G/B, i.e. a
+  // lightness shift (darktable perturbs Lab L only, keeping chroma).
+  if (s.grainAmount > 0) {
+    const minWH = Math.min(fw, fh) || 1;
+    const gx = (u * fw) / minWH;
+    const gy = (v * fh) / minWH;
+    const iso =
+      EFFECTS.GRAIN_ISO_BASE * Math.pow(EFFECTS.GRAIN_ISO_OCTAVE, s.grainSize);
+    const zoom = (1 + (8 * (iso / EFFECTS.GRAIN_SCALE_FACTOR)) / 100) / 800;
+    const noise = simplex2dNoise(gx, gy, zoom);
+    const gu = Math.min(
+      Math.max(
+        noise * s.grainAmount * EFFECTS.GRAIN_LIGHTNESS_STRENGTH_SCALE,
+        -0.5,
+      ),
+      0.5,
     );
-    const d = s.grainAmount * EFFECTS.GRAIN_STRENGTH * n * mid;
+    const mb = s.grainMidtones * 100; // darktable midtones_bias, 0–100
+    const gp = EFFECTS.GRAIN_PAPER_GAMMA;
+    const l = Math.min(Math.max(LUMA[0] * r + LUMA[1] * g + LUMA[2] * b, 0), 1);
+    const d = paperResp(gu + paperRespInverse(l, mb, gp), mb, gp) - l;
     r += d;
     g += d;
     b += d;
