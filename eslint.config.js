@@ -27,4 +27,12 @@ export default [
       },
     },
   },
+  {
+    files: ["scripts/**"],
+    languageOptions: {
+      globals: {
+        ...globals.bunBuiltin,
+      },
+    },
+  },
 ];
