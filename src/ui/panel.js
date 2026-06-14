@@ -7,6 +7,7 @@ import { SECTIONS, GRADE_KEYS, HSL_KEYS, EFFECTS_KEYS } from "../state.js";
 import { buildGrading } from "./grading.js";
 import { buildMixer } from "./mixer.js";
 import { buildEffects } from "./effects.js";
+import { onDoubleTap } from "./double-tap.js";
 
 export const EYE_OPEN =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
@@ -97,7 +98,7 @@ export function buildPanel(
     input.addEventListener("input", () => {
       store.set({ [def.key]: input.valueAsNumber * def.scale });
     });
-    row.addEventListener("dblclick", () => {
+    onDoubleTap(row, () => {
       store.set({ [def.key]: (def.reset ?? 0) * def.scale });
     });
 

@@ -9,6 +9,7 @@
 
 import { moveRect, resizeRect, fitAspect } from "./crop-math.js";
 import { rotateRectCW, rotateRectCCW } from "../tone/geometry.js";
+import { onDoubleTap } from "./double-tap.js";
 
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const MIN_CROP_PX = 24; // display px — keeps the box and handles grabbable
@@ -336,8 +337,8 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
     syncAngleUi();
     handlers.onGeometryChange();
   });
-  // double-click the label/value to snap back to level
-  angleRow.addEventListener("dblclick", () => {
+  // double-tap the label/value to snap back to level
+  onDoubleTap(angleRow, () => {
     if (!enabled || angle === 0) return;
     angle = 0;
     syncAngleUi();

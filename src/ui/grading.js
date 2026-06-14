@@ -6,6 +6,7 @@
 
 import { GRADE_ZONES, GRADE_SLIDERS } from "../state.js";
 import { hueColor } from "../tone/tone-math.js";
+import { onDoubleTap } from "./double-tap.js";
 
 /**
  * @typedef {import("../state.js").SliderDef} SliderDef
@@ -119,7 +120,7 @@ function createWheel(zone, cssSize, store) {
   };
   root.addEventListener("pointerup", release);
   root.addEventListener("pointercancel", release);
-  root.addEventListener("dblclick", () => {
+  onDoubleTap(root, () => {
     store.set({ [zone.hue]: 0, [zone.sat]: 0 });
   });
 

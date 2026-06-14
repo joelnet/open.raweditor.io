@@ -14,6 +14,7 @@ import {
   effectiveMasks,
 } from "../tone/mask-math.js";
 import { EYE_OPEN, EYE_CLOSED } from "./panel.js";
+import { onDoubleTap } from "./double-tap.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ROTATE_ARM = 26; // display px between shape and rotate handle
@@ -333,7 +334,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     input.value = "0";
     input.setAttribute("aria-label", `mask ${def.label.toLowerCase()}`);
     input.addEventListener("input", () => write(input.valueAsNumber));
-    row.addEventListener("dblclick", () => write(reset));
+    onDoubleTap(row, () => write(reset));
     row.append(label, value, input);
     sliderRows.push({
       row,
