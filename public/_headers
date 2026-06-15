@@ -1,4 +1,4 @@
-# Cloudflare Pages header rules. libraw-wasm needs cross-origin isolation
+# Cloudflare static-asset header rules. libraw-wasm needs cross-origin isolation
 # (SharedArrayBuffer); these mirror the headers set by server.js and vite.
 /*
   Cross-Origin-Opener-Policy: same-origin

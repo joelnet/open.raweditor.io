@@ -78,6 +78,20 @@ the URL to auto-load one on startup, e.g. `http://localhost:5173/?open=a7m3.ARW`
 
 Husky runs lint (which includes typecheck) on commit.
 
+## Deployment
+
+The build is static and is served from Cloudflare Workers static assets
+(config in `wrangler.jsonc`). Pushing to `main` triggers a Cloudflare deploy
+to <https://open.raweditor.io>; the `public/_headers` file carries the
+COOP/COEP cross-origin-isolation headers that libraw-wasm needs.
+
+To build and deploy manually:
+
+```sh
+npm run build
+npx wrangler deploy
+```
+
 ## Requirements
 
 A browser with WebGL2 and cross-origin isolation support: any recent Chrome,
