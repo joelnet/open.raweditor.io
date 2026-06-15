@@ -161,15 +161,15 @@ async function openFile(file) {
     histo.setHasImage(true);
     histo.setExif(meta);
     status.setFile(
-      `${file.name} — ${meta.camera_make} ${meta.camera_model} — ` +
+      `${file.name} · ${meta.camera_make} ${meta.camera_model} · ` +
         `${meta.width}×${meta.height} (preview decoded in ${(decodeMs / 1000).toFixed(1)}s)`,
     );
   } catch (err) {
     console.error(err);
     status.setFile(
       currentFile
-        ? `${currentFile.name} — previous image kept`
-        : "No file loaded — drop a Sony .ARW, Fujifilm .RAF, or DNG",
+        ? `${currentFile.name} (previous image kept)`
+        : "No file loaded: drop a RAW file",
     );
     status.setError(
       `Could not decode ${file.name}: ${/** @type {any} */ (err)?.message ?? err}`,
@@ -321,9 +321,11 @@ initDivider({ onResize: layout });
 initElevator();
 
 if (!renderer) {
-  status.setError("WebGL2 is not available in this browser — cannot preview.");
+  status.setError(
+    "WebGL2 is not available in this browser, so it cannot preview.",
+  );
 } else {
-  status.setFile("No file loaded — drop a Sony .ARW, Fujifilm .RAF, or DNG");
+  status.setFile("No file loaded: drop a RAW file");
   store.set({ ...ZERO_SETTINGS }); // sync slider readouts
 
   // Automation/debug hook: ?open=<sample-name> fetches from /samples/.

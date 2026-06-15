@@ -1,4 +1,4 @@
-# Sky selection mask — failed attempt (2026-06)
+# Sky selection mask: failed attempt (2026-06)
 
 Status: **abandoned and reverted** (never merged). This documents the approach
 and why it failed so a future attempt doesn't retrace it.
@@ -16,7 +16,7 @@ preview and export matched by construction.
 Pipeline lived in `src/tone/sky-math.js` (+ `sky-worker.js`, `sky-client.js`),
 all on a ≤320px analysis grid, display-referred (sRGB-encoded):
 
-1. **Border detection** — Shen & Wang 2013 ("Sky Region Detection in a Single
+1. **Border detection**: Shen & Wang 2013 ("Sky Region Detection in a Single
    Image for Autonomous Ground Robot Navigation"): sweep ~120 Sobel gradient
    thresholds (5..600 in 8-bit units); each threshold's border is the first
    per-column gradient crossing (sky must touch the top edge).
@@ -28,24 +28,24 @@ all on a ≤320px analysis grid, display-referred (sRGB-encoded):
      sensor noise).
    - Added **flat horizontal lines** to the candidate pool, since cloud edges
      block the per-column gradient scan.
-3. **No-sky tests** — the paper's border-shape tests (border hugging the top,
+3. **No-sky tests**: the paper's border-shape tests (border hugging the top,
    shallow + jagged border), plus a Luo & Etz 2002-style color plausibility
    prior: accepted sky must be bright (mean encoded luma ≥ 0.35) or
    decisively blue (B > 1.25·R and 1.25·G). Without this, Fisher separation
    accepts any strong color split (lit indoor wall over dark floor).
-4. **Soft classification** — border seeds two Gaussian color models
+4. **Soft classification**: border seeds two Gaussian color models
    (sky/ground); pixels above a horizon (95th-percentile border depth) get
    the equal-prior posterior plus a vertical position bias (logit +2 at the
    top fading to 0). Below the horizon: never sky (keeps water reflections
    out).
-5. **Refinement** — guided filter (He et al. 2010, same recipe as the dehaze
+5. **Refinement**: guided filter (He et al. 2010, same recipe as the dehaze
    transmission refinement); coefficients joint-upsampled against the
    preview's encoded luma for an edge-aware mask at preview resolution.
 
 ## Why it failed
 
 **The mask was too inaccurate too often: it over-selected or under-selected
-the sky on real images.** No single tunable was at fault — the failure was
+the sky on real images.** No single tunable was at fault; the failure was
 systemic:
 
 - The gradient-border premise (one sky/ground boundary per column, sky
@@ -61,7 +61,7 @@ systemic:
   right often enough.
 
 Per-image tuning could rescue individual photos, but a mask feature must be
-right nearly always with zero user parameters — classical heuristics on a
+right nearly always with zero user parameters; classical heuristics on a
 320px grid didn't reach that bar.
 
 ## Ideas for a future attempt
@@ -69,11 +69,11 @@ right nearly always with zero user parameters — classical heuristics on a
 - **Semantic segmentation model** (ONNX Runtime Web / WebGPU): a small
   sky-segmentation or scene-parsing net (e.g. trained on ADE20K sky class)
   sidesteps the color/gradient ambiguity entirely. Cost: model download,
-  inference time, WebGPU/wasm complexity on this host (Raspberry Pi —
+  inference time, WebGPU/wasm complexity on this host (Raspberry Pi;
   check perf).
 - **Depth-estimation models** (e.g. Depth Anything small): sky is at
   infinite depth; thresholding far depth may be more robust than color.
-- **Keep the guided-filter refinement** — the edge-aware upsampling and the
+- **Keep the guided-filter refinement**: the edge-aware upsampling and the
   preview/export-share-one-plane architecture worked; only the coarse
   detection was the problem. Any future detector can slot into the same
   worker → weight plane → `u_skyM` plumbing.

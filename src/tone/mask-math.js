@@ -29,7 +29,7 @@ import { MASK } from "./constants.js";
  * normalized frame-UV space, `coverageW`×`coverageH`). The raster is
  * bilinearly sampled — preview and export agree because the grid is
  * resolution-independent (longest edge MASK.BRUSH_RES). `coverage` is
- * absent on masks that aren't brushes. (Lightroom brush / darktable drawn
+ * absent on masks that aren't brushes. (A darktable-style drawn
  * mask.) The painting UI mutates this Uint8Array *in place* during a stroke
  * (no per-move reallocation) and bumps `coverageVersion` to notify the
  * store; the renderer keys its per-layer GPU re-upload off that version,
@@ -145,7 +145,7 @@ export function createBrushMask(coverageW, coverageH) {
 
 /**
  * Stamp one soft circular brush dab into a coverage grid, in normalized
- * frame-UV space. Mirrors a Lightroom/darktable round brush: a radial
+ * frame-UV space. Mirrors a darktable round brush: a radial
  * falloff from a hard inner core (`hardness`) out to the edge, accumulated
  * by `flow` (each dab adds toward full coverage; erase removes toward 0),
  * clamped to 0–255. The dab is circular in *frame px*, so it stays round

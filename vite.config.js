@@ -12,7 +12,7 @@ const isolationHeaders = {
 
 // SharedArrayBuffer additionally requires a secure context. localhost
 // qualifies over plain http, but access from other devices (e.g. a phone
-// on the LAN) needs https — `npm run dev:phone` sets HTTPS=1 to serve a
+// on the LAN) needs https — `npm run dev:https` sets HTTPS=1 to serve a
 // self-signed cert. Accept the browser warning once on the device.
 const useHttps = !!process.env.HTTPS;
 

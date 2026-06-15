@@ -856,7 +856,7 @@ button:disabled {
   opacity: 0.4;
 }
 
-/* ---- color mixer: Lightroom-style band dots + H/S/L sliders ---- */
+/* ---- color mixer: band dots + H/S/L sliders ---- */
 
 .mx-tabs {
   display: flex;
@@ -916,7 +916,7 @@ button:disabled {
   pointer-events: none;
 }
 
-/* ---- color grading: Lightroom-style tab strip + hue/sat wheels ---- */
+/* ---- color grading: tab strip + hue/sat wheels ---- */
 
 .cg-tabs {
   display: flex;

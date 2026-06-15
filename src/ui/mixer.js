@@ -1,4 +1,4 @@
-// Lightroom-style HSL color mixer UI: a tab strip of 8 color dots (one per
+// HSL color mixer UI: a tab strip of 8 color dots (one per
 // hue band) and hue/saturation/luminance sliders for the selected band.
 // Dot colors come from the same band centers the pipeline weights with
 // (HSL.CENTERS through hueColor()), so the dot you pick is the hue range

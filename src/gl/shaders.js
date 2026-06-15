@@ -535,7 +535,7 @@ void main() {
   rgb *= exp2(${f(TONE.SH_STRENGTH_EV)} * (u_shadows * mS + u_highlights * mH));
 
   // 5.5 local masks: each mask's own adjustment set, applied through its
-  // per-pixel weight (Lightroom layering: locals stack on the globals)
+  // per-pixel weight (locals stack on the globals)
   for (int i = 0; i < ${MASK.MAX}; i++) {
     if (i >= u_maskCount) break;
     float mw = maskWeight(v_uv, u_frame, u_maskGeo[i], u_maskParam[i]);

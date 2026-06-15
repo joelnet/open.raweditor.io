@@ -22,7 +22,7 @@ export const TONE = {
 };
 
 /**
- * Color mixer (Lightroom HSL panel): per-band hue / saturation / luminance.
+ * Color mixer (HSL panel): per-band hue / saturation / luminance.
  * The algorithm follows the open-source consensus: HSV over display-referred
  * (sRGB-encoded) RGB à la RawTherapee's HSV equalizer; a pixel's hue
  * selects the two adjacent bands and smoothstep-crossfades their
@@ -36,8 +36,8 @@ export const TONE = {
  */
 export const HSL = {
   /** Band center hues in turns: red, orange, yellow, green, aqua, blue,
-   *  purple, magenta. Non-uniform on purpose — Lightroom keeps the warm
-   *  (skin-tone) bands narrow and the green–blue bands wide. */
+   *  purple, magenta. Non-uniform on purpose — warm (skin-tone) bands stay
+   *  narrow and the green–blue bands wide. */
   CENTERS: [
     0,
     30 / 360,
@@ -49,7 +49,7 @@ export const HSL = {
     300 / 360,
   ],
   /** Hue slider ±1 rotates the band by ±HUE_RANGE turns (±30° — one warm
-   *  band over, Lightroom's reach). */
+   *  band over). */
   HUE_RANGE: 30 / 360,
   /** Luminance slider ±1 gains the band by ±LUM_EV EV (linear light). */
   LUM_EV: 1.0,
@@ -59,7 +59,7 @@ export const HSL = {
 };
 
 /**
- * Color grading (Lightroom-style split toning): per-zone hue/sat tints and
+ * Color grading (split toning): per-zone hue/sat tints and
  * luminance gains, weighted by smoothstep masks on sqrt-luma. Mask shape
  * follows darktable's color balance rgb (masked zones) and splittoning
  * (balance shifts the shadow/highlight crossover); the tint itself is a
@@ -134,7 +134,7 @@ export const SPATIAL = {
 };
 
 /**
- * Local adjustment masks (Lightroom-style linear/radial gradients). Mask
+ * Local adjustment masks (linear/radial gradients). Mask
  * shapes follow darktable: the linear gradient is a smoothstep ramp across
  * a rotated line (masks/gradient.c's sigmoidal falloff), the radial is a
  * rotated ellipse with a quadratic falloff between an inner fully-selected
@@ -145,7 +145,7 @@ export const MASK = {
   MAX: 8,
   /** Default linear falloff half-width, as a fraction of the diagonal. */
   LINEAR_RANGE: 0.1,
-  /** Default radial feather (Lightroom's default of 50). */
+  /** Default radial feather (default of 50). */
   RADIAL_FEATHER: 0.5,
   /** Default radial semi-axes, as fractions of min(width, height). */
   RADIAL_RADIUS: [0.35, 0.25],
@@ -155,8 +155,8 @@ export const MASK = {
    * export sample the *same* coverage. The grid's longest edge is BRUSH_RES
    * texels; the short edge follows the frame aspect. Values are 0–255
    * coverage, bilinearly sampled (LINEAR-filtered R8 on the GPU,
-   * hand-bilinear on the CPU) — the same approach as Lightroom's brush /
-   * darktable's drawn-mask raster.
+   * hand-bilinear on the CPU) — the same approach as darktable's
+   * drawn-mask raster.
    */
   BRUSH_RES: 1024,
   /** Default brush radius, as a fraction of the frame's longest edge. */

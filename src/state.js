@@ -153,7 +153,7 @@ export const COLOR_SLIDERS = /** @type {const} */ ([
 ]);
 
 /**
- * Color mixer bands (Lightroom HSL): hue shift, saturation, and luminance
+ * Color mixer bands (HSL): hue shift, saturation, and luminance
  * sliders per band, all stored in [-1, +1]. Band order matches
  * HSL.CENTERS in tone/constants.js — keep the two lists in sync.
  * @typedef {{ label: string, hue: SliderKey, sat: SliderKey,
@@ -262,7 +262,7 @@ export const EFFECTS_KEYS = /** @type {readonly SliderKey[]} */ ([
 ]);
 
 /**
- * Color grading zones (Lightroom 3-way): one color wheel (hue/sat) plus a
+ * Color grading zones (3-way): one color wheel (hue/sat) plus a
  * luminance slider per zone. Hues are stored in turns [0, 1), sats in [0, 1].
  * @typedef {{ label: string, hue: SliderKey, sat: SliderKey,
  *             lum: SliderKey }} GradeZone

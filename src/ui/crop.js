@@ -267,8 +267,8 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
   rotateRow.append(rotCcwBtn, rotCwBtn);
 
   // Flip mirrors the image content beneath the crop and masks (which stay
-  // put in frame space — Lightroom keeps your crop + local adjustments and
-  // mirrors the photo). It only changes frame→source sampling, so no rect
+  // put in frame space — the crop + local adjustments hold and only the
+  // photo mirrors). It only changes frame→source sampling, so no rect
   // or mask anchor moves here; geometry() carries the flags onward.
   const flipRow = el("div", "crop-actions crop-flip");
   const flipHBtn = /** @type {HTMLButtonElement} */ (

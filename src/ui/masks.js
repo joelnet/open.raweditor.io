@@ -1,4 +1,4 @@
-// Local adjustment masks (Lightroom-style linear/radial gradients): a
+// Local adjustment masks (linear/radial gradients): a
 // MASKS sidebar section that owns the `masks` array in the store, plus a
 // viewport SVG overlay for editing the selected mask's geometry — drag the
 // pin to move, the axis handles to resize (radial) or the boundary lines
@@ -171,7 +171,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
 
   // Brush tool state (the active drawing settings, not per-mask): radius as
   // a fraction of the longest frame edge, hardness/flow in [0, 1], plus the
-  // add/erase toggle. One shared brush, like Lightroom's brush tool. Painting
+  // add/erase toggle. One shared brush. Painting
   // is always live while a brush mask is selected — there's no paint toggle.
   let brushSize = MASK.BRUSH_RADIUS;
   let brushHardness = MASK.BRUSH_HARDNESS;
@@ -262,7 +262,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       mask = createBrushMask(dims.w, dims.h);
       // a brush has no analytic geometry to drag — you paint it on the
       // canvas. Turn the red coverage overlay on so strokes are visible as
-      // they're laid down (Lightroom shows the mask while you brush).
+      // they're laid down (the mask shows while you brush).
       showMask = true;
     } else {
       mask =
@@ -503,7 +503,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
 
   // Brush-size cursor: a ring that tracks the pointer over the paint surface
   // so the brush footprint (and add vs erase, by color) is visible before a
-  // stroke lands — the Lightroom/Photoshop brush cursor. Pointer-transparent,
+  // stroke lands — the Photoshop-style brush cursor. Pointer-transparent,
   // sized from brushSize in display px. Lives inside #paint-overlay so it
   // sits above the canvas wherever the pointer is.
   const brushCursor = el("div", "brush-cursor");
@@ -733,7 +733,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     const s = dispScale();
     if (drag.handle === "move") {
       const [u, v] = dispToUv(px - drag.grabX, py - drag.grabY);
-      // allow off-frame anchors (Lightroom does) but keep them grabbable
+      // allow off-frame anchors but keep them grabbable
       patchSelected({
         x: Math.min(Math.max(u, -0.5), 1.5),
         y: Math.min(Math.max(v, -0.5), 1.5),

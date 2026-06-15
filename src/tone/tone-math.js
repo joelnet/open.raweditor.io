@@ -95,7 +95,7 @@ export const ZERO_SETTINGS = Object.freeze({
   gradeHighHue: 0,
   gradeHighSat: 0,
   gradeHighLum: 0,
-  // Lightroom's blending default: tints are identity at sat 0, so 0.5 here
+  // blending default: tints are identity at sat 0, so 0.5 here
   // keeps ZERO_SETTINGS an identity transform.
   gradeBlending: 0.5,
   gradeBalance: 0,
@@ -658,7 +658,7 @@ export function applyTonePixel(r, g, b, s, maskWeights) {
   }
 
   // 5.5 local masks: each mask's own adjustment set, applied through its
-  // per-pixel weight (Lightroom layering: locals stack on the globals)
+  // per-pixel weight (locals stack on the globals)
   if (maskWeights && s.masks) {
     for (let i = 0; i < s.masks.length; i++) {
       const m = maskWeights[i];

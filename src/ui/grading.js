@@ -1,4 +1,4 @@
-// Lightroom-style color grading UI: a tab strip (3-way / shadows /
+// Color grading UI: a tab strip (3-way / shadows /
 // midtones / highlights), hue-saturation color wheels with draggable
 // pucks, per-zone luminance sliders, and blending/balance sliders.
 // Wheel colors come from the same hueColor() the pipeline tints with, so
