@@ -37,8 +37,8 @@ export default defineConfig({
       registerType: "prompt",
       injectRegister: false,
       manifest: {
-        name: "RAW Editor",
-        short_name: "RAW Editor",
+        name: "Open Raw Editor",
+        short_name: "Open RAW",
         description: "In-browser RAW photo editor",
         start_url: "/",
         display: "standalone",

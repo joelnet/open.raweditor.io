@@ -16,6 +16,11 @@ ICONS = ROOT / "public" / "icons"
 # canvas; keep the mark inside 70% for comfortable breathing room.
 MASKABLE_CONTENT_FRACTION = 0.70
 
+# Maskable icons must stay full-bleed and opaque — Android masks them into a
+# circle/squircle, so a transparent one would show the launcher through the
+# mask. Fill behind the (transparent) mark with the app's --panel color.
+MASKABLE_BG = (0x1B, 0x21, 0x33)
+
 
 def content_bbox(img, tolerance=30):
     """Bounding box of pixels that differ from the corner background color."""
@@ -32,8 +37,7 @@ def content_bbox(img, tolerance=30):
 
 
 def main():
-    logo = Image.open(LOGO).convert("RGB")
-    bg = logo.getpixel((2, 2))
+    logo = Image.open(LOGO).convert("RGBA")
     left, top, right, bottom = content_bbox(logo)
     mark_size = max(right - left, bottom - top)
 
@@ -54,8 +58,9 @@ def main():
     scaled = logo.resize(
         (round(logo.width * scale), round(logo.height * scale)), Image.LANCZOS
     )
-    canvas = Image.new("RGB", (size, size), bg)
-    canvas.paste(scaled, ((size - scaled.width) // 2, (size - scaled.height) // 2))
+    canvas = Image.new("RGB", (size, size), MASKABLE_BG)
+    pos = ((size - scaled.width) // 2, (size - scaled.height) // 2)
+    canvas.paste(scaled, pos, scaled)  # use the mark's alpha as the paste mask
     canvas.save(ICONS / "icon-maskable-512.png")
     print(f"icons/icon-maskable-512.png ({size}x{size}, mark at "
           f"{MASKABLE_CONTENT_FRACTION:.0%})")

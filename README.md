@@ -1,4 +1,4 @@
-# raw-editor
+# Open Raw Editor
 
 A RAW photo editor that runs entirely in the browser. Drop a Sony `.ARW`,
 Fujifilm `.RAF`, or `.DNG` file, adjust it with Lightroom-style sliders on a

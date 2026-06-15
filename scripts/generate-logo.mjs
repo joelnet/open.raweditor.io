@@ -3,9 +3,9 @@
 //
 // Renders drawWheel() from src/ui/grading.js in headless chromium at a
 // devicePixelRatio chosen so the 148px detail wheel lands at the same
-// proportions as the original 196px hand screenshot, composited over the
-// app's --panel color — i.e. the screenshot-with-puck-hidden process,
-// but pixel-exact at 1024×1024. Needs `npm run dev` serving :5173.
+// proportions as the original 196px hand screenshot, on a transparent
+// background — i.e. the screenshot-with-puck-hidden process, but
+// pixel-exact at 1024×1024. Needs `npm run dev` serving :5173.
 //
 //   bun scripts/generate-logo.mjs && npm run icons
 
@@ -53,8 +53,11 @@ try {
       ).json();
       wsUrl = targets.find((t) => t.type === "page")?.webSocketDebuggerUrl;
     } catch {
-      await Bun.sleep(200);
+      // CDP endpoint not up yet
     }
+    // always wait between polls: the endpoint can answer before chromium has
+    // created the page target, and busy-looping would burn all retries instantly
+    if (!wsUrl) await Bun.sleep(200);
   }
   if (!wsUrl) throw new Error("no CDP page target");
 
@@ -128,9 +131,7 @@ try {
     const out = document.createElement("canvas");
     out.width = out.height = ${SIZE};
     const ctx = out.getContext("2d");
-    ctx.fillStyle = getComputedStyle(document.documentElement)
-      .getPropertyValue("--panel").trim();
-    ctx.fillRect(0, 0, ${SIZE}, ${SIZE});
+    // leave the canvas transparent; drawWheel renders only the circle
     ctx.drawImage(
       wheel,
       Math.round((${SIZE} - wheel.width) / 2),
