@@ -79,21 +79,6 @@ the URL to auto-load one on startup, e.g. `http://localhost:5173/?open=a7m3.ARW`
 
 Husky runs lint (which includes typecheck) on commit.
 
-## Deployment
-
-To allow `joel` to restart the production service without `sudo`, install the
-polkit rule:
-
-```sh
-sudo install -o root -g root -m 0644 deploy/50-raw-editor.rules /etc/polkit-1/rules.d/50-raw-editor.rules
-```
-
-Then verify:
-
-```sh
-systemctl restart raw-editor
-```
-
 ## Requirements
 
 A browser with WebGL2 and cross-origin isolation support — any recent Chrome,
