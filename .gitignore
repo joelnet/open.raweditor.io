@@ -1,6 +1,7 @@
-node_modules
+.agents/
+.claude/
 dist/
-.DS_Store
-*.log
-samples/
 graphify-out/
+node_modules
+samples/
+
