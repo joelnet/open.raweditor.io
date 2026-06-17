@@ -72,6 +72,7 @@ uniform float u_temp;           // [-1, 1]
 uniform float u_tint;           // [-1, 1]
 uniform float u_exposure;       // EV
 uniform float u_contrast;       // [-1, 1]
+uniform float u_lightBalance;   // [-1, 1]
 uniform float u_highlights;     // [-1, 1]
 uniform float u_shadows;        // [-1, 1]
 uniform float u_whites;         // [-1, 1]
@@ -102,14 +103,15 @@ uniform float u_grainSize;      // [-1, 1] (coarseness)
 uniform float u_grainMidtones;  // [0, 1] — darktable midtones bias (×100)
 uniform float u_noise;          // [-1, 1] — positive adds chromatic noise
 
-// Presence aux, computed per image by spatial-worker.js (slider moves stay
+// Spatial aux, computed per image by spatial-worker.js (slider moves stay
 // single-pass): à trous detail planes of the source gamma-luma, the
-// Richardson-Lucy linear-luma delta, and the guided-filter-refined haze
-// amount. u_hasAux gates until they're ready.
+// Richardson-Lucy linear-luma delta, the guided-filter-refined haze amount,
+// and Light Balance's guided tonal weight. u_hasAux gates until ready.
 uniform int u_hasAux;
 uniform sampler2D u_detail;     // c1, c2, c3, base (clarity residual)
 uniform sampler2D u_sharpenD;   // Richardson-Lucy linear-luma delta
 uniform sampler2D u_dehazeD;    // refined dark channel [0, 1]
+uniform sampler2D u_lightBalanceW; // guided tonal weight [0.25, 1]
 uniform vec3 u_airlight;
 
 // Geometry: orientation (quarter-turns CW) + straighten rotation. v_uv is
@@ -562,6 +564,15 @@ void main() {
       if (mw > 0.0) {
         rgb = applyMaskPresence(rgb, ySrc, p, mw, u_maskAdjD[i]);
       }
+    }
+    if (u_lightBalance != 0.0) {
+      float lbw = texelFetch(u_lightBalanceW, p, 0).r;
+      float gain = clamp(
+        1.0 + ${f(TONE.LIGHT_BALANCE_STRENGTH)} * u_lightBalance * lbw,
+        ${f(TONE.LIGHT_BALANCE_GAIN_RANGE[0])},
+        ${f(TONE.LIGHT_BALANCE_GAIN_RANGE[1])}
+      );
+      rgb *= gain;
     }
   }
 

@@ -20,6 +20,7 @@ const UNIFORMS = /** @type {const} */ ([
   "tint",
   "exposure",
   "contrast",
+  "lightBalance",
   "highlights",
   "shadows",
   "whites",
@@ -75,6 +76,7 @@ function compileShader(gl, type, source) {
  * detail planes (c1, c2, c3, clarity base), the Richardson-Lucy sharpening
  * delta, the refined haze amount, and the estimated airlight color.
  * @typedef {{ detail: Float32Array, sharpenD: Float32Array, dehazeD: Float32Array,
+ *             lightBalanceW: Float32Array,
  *             airlight: [number, number, number],
  *             width: number, height: number }} PresenceAux
  */
@@ -142,10 +144,11 @@ export function createRenderer(canvas) {
   const locHasAux = gl.getUniformLocation(program, "u_hasAux");
   const locAirlight = gl.getUniformLocation(program, "u_airlight");
   gl.uniform1i(gl.getUniformLocation(program, "u_image"), 0);
-  // unit 1 is the histogram readback target; presence aux lives on 2, 3, 5
+  // unit 1 is the histogram readback target; spatial aux lives on 2, 3, 5, 6
   gl.uniform1i(gl.getUniformLocation(program, "u_detail"), 2);
   gl.uniform1i(gl.getUniformLocation(program, "u_dehazeD"), 3);
   gl.uniform1i(gl.getUniformLocation(program, "u_sharpenD"), 5);
+  gl.uniform1i(gl.getUniformLocation(program, "u_lightBalanceW"), 6);
   // brush-mask coverage array lives on unit 4
   gl.uniform1i(gl.getUniformLocation(program, "u_brushMask"), 4);
   gl.uniform1i(locHasAux, 0);
@@ -359,6 +362,7 @@ export function createRenderer(canvas) {
   createNearestTexture(gl.TEXTURE2);
   createNearestTexture(gl.TEXTURE3);
   createNearestTexture(gl.TEXTURE5);
+  createNearestTexture(gl.TEXTURE6);
   // Integer textures are non-filterable: NEAREST is mandatory.
   createNearestTexture(gl.TEXTURE0);
 
@@ -450,6 +454,18 @@ export function createRenderer(canvas) {
         gl.RED,
         gl.FLOAT,
         aux.dehazeD,
+      );
+      gl.activeTexture(gl.TEXTURE6);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.R16F,
+        aux.width,
+        aux.height,
+        0,
+        gl.RED,
+        gl.FLOAT,
+        aux.lightBalanceW,
       );
       gl.activeTexture(gl.TEXTURE0);
       gl.uniform3f(

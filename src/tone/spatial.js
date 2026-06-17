@@ -17,7 +17,7 @@
 //   clarity    — base-band local contrast with d·exp(-k·d²) halo rolloff
 //   dehaze     — dark channel prior + guided-filter transmission refinement
 
-import { LUMA, SPATIAL, NR } from "./constants.js";
+import { LUMA, TONE, SPATIAL, NR } from "./constants.js";
 import { decodeInput, encodeInput } from "./tone-math.js";
 import { prepareMask, maskWeight } from "./mask-math.js";
 import { ZERO_GEOMETRY, orientedDims, coverScale } from "./geometry.js";
@@ -559,6 +559,63 @@ function boxBlur(src, dst, tmp, w, h, r) {
 }
 
 /**
+ * Slider gain for Samsung-style Light Balance: positive values lift shadows
+ * most and highlights gently; negative values deepen shadows most.
+ * @param {number} weight tonal-region weight [highlightWeight, 1]
+ * @param {number} amount slider amount [-1, 1]
+ */
+export function lightBalanceGain(weight, amount) {
+  const [lo, hi] = TONE.LIGHT_BALANCE_GAIN_RANGE;
+  return Math.min(
+    Math.max(1 + TONE.LIGHT_BALANCE_STRENGTH * amount * weight, lo),
+    hi,
+  );
+}
+
+/**
+ * Edge-aware tonal-region weight for Light Balance. The guided filter runs
+ * on gamma-luma so the mask follows perceived tone, while the eventual gain
+ * is applied to linear RGB to preserve channel ratios.
+ * @param {Float32Array} luma linear-light luma plane
+ * @param {number} w @param {number} h
+ * @returns {Float32Array} weight: ~1 in shadows, nonzero in highlights
+ */
+export function computeLightBalanceWeightPlane(luma, w, h) {
+  const n = w * h;
+  const guide = gammaPlane(luma);
+  const tmp = new Float32Array(n);
+  const meanI = new Float32Array(n);
+  const corrII = new Float32Array(n);
+  const a = new Float32Array(n);
+  const b = new Float32Array(n);
+  const meanA = new Float32Array(n);
+  const meanB = new Float32Array(n);
+  const radius = Math.max(
+    1,
+    Math.round(TONE.LIGHT_BALANCE_RADIUS_FRAC * Math.max(w, h)),
+  );
+
+  boxBlur(guide, meanI, tmp, w, h, radius);
+  for (let i = 0; i < n; i++) corrII[i] = guide[i] * guide[i];
+  boxBlur(corrII, corrII, tmp, w, h, radius);
+  for (let i = 0; i < n; i++) {
+    const varI = Math.max(corrII[i] - meanI[i] * meanI[i], 0);
+    a[i] = varI / (varI + TONE.LIGHT_BALANCE_GF_EPS);
+    b[i] = meanI[i] - a[i] * meanI[i];
+  }
+  boxBlur(a, meanA, tmp, w, h, radius);
+  boxBlur(b, meanB, tmp, w, h, radius);
+
+  const out = new Float32Array(n);
+  const hiW = TONE.LIGHT_BALANCE_HIGHLIGHT_WEIGHT;
+  for (let i = 0; i < n; i++) {
+    const base = Math.min(Math.max(meanA[i] * guide[i] + meanB[i], 0), 1);
+    out[i] = hiW + (1 - hiW) * (1 - base);
+  }
+  return out;
+}
+
+/**
  * Separable box min (the dark channel's patch minimum).
  * @param {Float32Array} src @param {Float32Array} dst
  * @param {Float32Array} tmp @param {number} w @param {number} h
@@ -766,6 +823,7 @@ export function applyPresencePrepass(
   geometry = ZERO_GEOMETRY,
 ) {
   const sharpening = settings.sharpening ?? 0;
+  const lightBalance = settings.lightBalance ?? 0;
   const texture = settings.texture ?? 0;
   const clarity = settings.clarity ?? 0;
   const dehaze = settings.dehaze ?? 0;
@@ -792,6 +850,7 @@ export function applyPresencePrepass(
   const nr = Math.max(-(settings.noise ?? 0), 0);
   if (
     sharpening === 0 &&
+    lightBalance === 0 &&
     texture === 0 &&
     clarity === 0 &&
     dehaze === 0 &&
@@ -804,6 +863,10 @@ export function applyPresencePrepass(
   const { data, width, height, colors, bits } = image;
   const maxVal = bits === 16 ? 65535 : 255;
   const luma = lumaFromImage(image);
+  const lightBalanceW =
+    lightBalance !== 0
+      ? computeLightBalanceWeightPlane(luma, width, height)
+      : null;
   const aux =
     dehaze !== 0 || localDehaze
       ? computeDehazeAux(downsampleRgbFromImage(image))
@@ -917,6 +980,12 @@ export function applyPresencePrepass(
             b *= ratio;
           }
         }
+      }
+      if (lightBalanceW && lightBalance !== 0) {
+        const gain = lightBalanceGain(lightBalanceW[i], lightBalance);
+        r *= gain;
+        g *= gain;
+        b *= gain;
       }
       data[p] = Math.min(Math.max(encodeInput(r) * maxVal + 0.5, 0), maxVal);
       data[p + 1] = Math.min(

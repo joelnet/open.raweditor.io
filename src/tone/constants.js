@@ -15,6 +15,16 @@ export const TONE = {
   BLACKS_RANGE: 0.1,
   /** Max EV of shadows lift / highlights cut at slider ±1. */
   SH_STRENGTH_EV: 1.5,
+  /** Light Balance gain strength at slider ±1, scaled by the tonal weight. */
+  LIGHT_BALANCE_STRENGTH: 1.2,
+  /** Light Balance still moves highlights by this fraction of shadow gain. */
+  LIGHT_BALANCE_HIGHLIGHT_WEIGHT: 0.25,
+  /** Guided-filter radius as a fraction of the image long edge. */
+  LIGHT_BALANCE_RADIUS_FRAC: 0.02,
+  /** Guided-filter epsilon for the Light Balance tonal envelope. */
+  LIGHT_BALANCE_GF_EPS: 1e-4,
+  /** Hard guardrails for the signed Light Balance RGB gain. */
+  LIGHT_BALANCE_GAIN_RANGE: [0.05, 8],
   /** smoothstep edges (on sqrt-luma) where the shadows mask fades out. */
   SHADOW_MASK: [0.25, 0.6],
   /** smoothstep edges (on sqrt-luma) where the highlights mask fades in. */

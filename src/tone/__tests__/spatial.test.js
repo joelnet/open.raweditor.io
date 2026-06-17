@@ -6,12 +6,14 @@ import {
   gaussianBlur,
   computeDetailPlanes,
   computeSharpenDeltaPlane,
+  computeLightBalanceWeightPlane,
   computeDeltaPlane,
   textureDelta,
   clarityDelta,
   nrDelta,
   presenceRatio,
   sharpenRatio,
+  lightBalanceGain,
   dehazeTransmission,
   computeDehazeAux,
   downsampleRgbFromImage,
@@ -141,6 +143,41 @@ test("dehazeTransmission: identity at zero, floored, haze re-add above 1", () =>
     Math.max(1 - SPATIAL.DEHAZE_OMEGA, SPATIAL.DEHAZE_T_MIN),
   );
   assert.ok(dehazeTransmission(1, -1) > 1);
+});
+
+test("lightBalanceGain is signed and shadow-weighted", () => {
+  assert.equal(lightBalanceGain(1, 0), 1);
+  assert.ok(lightBalanceGain(1, 1) > lightBalanceGain(0.25, 1));
+  assert.ok(lightBalanceGain(1, -1) < lightBalanceGain(0.25, -1));
+  assert.ok(lightBalanceGain(0.25, 1) > 1);
+  assert.ok(lightBalanceGain(0.25, -1) < 1);
+});
+
+test("computeLightBalanceWeightPlane weights shadows above highlights", () => {
+  const w = 64;
+  const h = 8;
+  const luma = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      luma[y * w + x] = x < w / 2 ? 0.02 : 0.9;
+    }
+  }
+  const weights = computeLightBalanceWeightPlane(luma, w, h);
+  const dark = weights[Math.floor(h / 2) * w + 8];
+  const bright = weights[Math.floor(h / 2) * w + w - 9];
+  assert.ok(dark > bright + 0.3, `${dark} <= ${bright}`);
+  for (const v of weights) assert.ok(v >= 0.25 && v <= 1);
+});
+
+test("applyPresencePrepass applies Light Balance as an RGB ratio", () => {
+  const img = grayImage(8, 2, (x) => (x < 4 ? 0.04 : 0.8));
+  const before = img.data.slice();
+  applyPresencePrepass(img, { ...ZERO_SETTINGS, lightBalance: 1 }, 1);
+  const dark = img.data[0] / before[0];
+  const bright = img.data[7 * 3] / before[7 * 3];
+  assert.ok(dark > bright, `${dark} <= ${bright}`);
+  assert.ok(dark > 1);
+  assert.ok(bright > 1);
 });
 
 test("computeDeltaPlane matches per-pixel evaluation of the detail planes", () => {

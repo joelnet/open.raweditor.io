@@ -62,6 +62,15 @@ export const TONE_SLIDERS = /** @type {const} */ ([
     decimals: 0,
   },
   {
+    key: "lightBalance",
+    label: "LIGHT BALANCE",
+    min: -100,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+  },
+  {
     key: "highlights",
     label: "HIGHLIGHTS",
     min: -100,

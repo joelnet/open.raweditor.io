@@ -24,7 +24,7 @@ import {
  * `masks` are local adjustments (linear/radial gradients); treat the array
  * as immutable — always replace it, never mutate in place.
  * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
- *             highlights: number, shadows: number, whites: number,
+ *             lightBalance: number, highlights: number, shadows: number, whites: number,
  *             blacks: number, sharpening: number, texture: number,
  *             clarity: number, dehaze: number,
  *             vibrance: number, saturation: number,
@@ -55,6 +55,7 @@ export const ZERO_SETTINGS = Object.freeze({
   tint: 0,
   exposure: 0,
   contrast: 0,
+  lightBalance: 0,
   highlights: 0,
   shadows: 0,
   whites: 0,
