@@ -187,9 +187,10 @@ async function openFile(file) {
 
 // --- export ---
 
-/** @param {"png" | "jpeg" | "tiff"} format */
-async function onExport(format) {
+/** @param {{ format: "png" | "jpeg" | "tiff", width: number, height: number }} opts */
+async function onExport(opts) {
   if (!currentFile || opening) return;
+  const { format, width, height } = opts;
   const file = currentFile;
   const settings = effectiveSettings();
   const cropRect = crop.rect();
@@ -199,8 +200,6 @@ async function onExport(format) {
     status.setProgress("Export: decoding full resolution…");
     const bytes = new Uint8Array(await file.arrayBuffer());
     const { image } = await decoder.decode(bytes, {});
-    const frame = orientedDims(geometry.orient, image.width, image.height);
-    const px = cropPixelRect(cropRect, frame.width, frame.height);
     status.setProgress("Export: applying tone…");
     const blob = await exporter.exportImage(
       image,
@@ -209,6 +208,7 @@ async function onExport(format) {
       cropRect,
       geometry,
       previewSize?.width ?? 0,
+      { width, height },
       (done, total) => {
         status.setProgress(
           `Export: applying tone… ${Math.round((done / total) * 100)}%`,
@@ -220,7 +220,7 @@ async function onExport(format) {
     const name = file.name.replace(/\.[^.]+$/, "") + ext;
     downloadBlob(blob, name);
     status.setProgress(
-      `Exported ${name} (${px.w}×${px.h}, ${(blob.size / 1e6).toFixed(1)}MB)`,
+      `Exported ${name} (${width}×${height}, ${(blob.size / 1e6).toFixed(1)}MB)`,
     );
   } catch (err) {
     console.error(err);
@@ -304,6 +304,7 @@ function onRevert() {
 
 const panel = buildPanel(panelScroll, store, {
   onExport,
+  getExportSize: () => crop.exportSize(),
   onBypassChange: queueRender,
   onAuto,
   onRevert,

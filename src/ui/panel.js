@@ -9,6 +9,8 @@ import { buildMixer } from "./mixer.js";
 import { buildEffects } from "./effects.js";
 import { onDoubleTap } from "./double-tap.js";
 
+const MAX_EXPORT_DIMENSION = 32768;
+
 export const EYE_OPEN =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
   'stroke="currentColor" stroke-width="1.4" aria-hidden="true">' +
@@ -37,7 +39,9 @@ function el(tag, className, text) {
 /**
  * @param {HTMLElement} container scrollable column the sections render into
  * @param {import("../state.js").Store} store
- * @param {{ onExport: (format: "png" | "jpeg" | "tiff") => void,
+ * @param {{ onExport: (opts: { format: "png" | "jpeg" | "tiff",
+ *                              width: number, height: number }) => void,
+ *           getExportSize: () => { width: number, height: number } | null,
  *           onBypassChange: () => void,
  *           onAuto: (title: string) => void,
  *           onRevert: () => void }} handlers
@@ -45,7 +49,7 @@ function el(tag, className, text) {
 export function buildPanel(
   container,
   store,
-  { onExport, onBypassChange, onAuto, onRevert },
+  { onExport, getExportSize, onBypassChange, onAuto, onRevert },
 ) {
   /** A key can have several rows (e.g. luminance in 3-way and detail views).
    * @type {{ key: string, input: HTMLInputElement, value: HTMLElement,
@@ -165,26 +169,163 @@ export function buildPanel(
   const exportSection = el("div", "section section-export");
   exportSection.append(el("div", "section-header", "EXPORT"));
   const exportBody = el("div", "export-body");
-  const exportRow = el("div", "export-row");
-  const pngBtn = /** @type {HTMLButtonElement} */ (
-    el("button", "", "Export PNG")
+  const exportBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "export-open", "Export...")
   );
-  const jpgBtn = /** @type {HTMLButtonElement} */ (
-    el("button", "", "Export JPG")
-  );
-  const tiffBtn = /** @type {HTMLButtonElement} */ (
-    el("button", "", "Export TIFF")
-  );
-  pngBtn.disabled = true;
-  jpgBtn.disabled = true;
-  tiffBtn.disabled = true;
-  tiffBtn.title = "Uncompressed 16-bit TIFF";
-  pngBtn.addEventListener("click", () => onExport("png"));
-  jpgBtn.addEventListener("click", () => onExport("jpeg"));
-  tiffBtn.addEventListener("click", () => onExport("tiff"));
-  exportRow.append(pngBtn, jpgBtn, tiffBtn);
-  exportBody.append(exportRow);
+  exportBtn.type = "button";
+  exportBtn.disabled = true;
+  exportBody.append(exportBtn);
   exportSection.append(exportBody);
+
+  const dialog = /** @type {HTMLDialogElement} */ (
+    el("dialog", "export-dialog")
+  );
+  dialog.setAttribute("aria-labelledby", "export-dialog-title");
+  const form = /** @type {HTMLFormElement} */ (el("form", "export-form"));
+  form.method = "dialog";
+  const title = el("div", "export-dialog-title", "EXPORT");
+  title.id = "export-dialog-title";
+
+  const formatGroup = el("fieldset", "export-format");
+  const formatLegend = el("legend", "", "TYPE");
+  const formats = /** @type {const} */ ([
+    ["png", "PNG"],
+    ["jpeg", "JPG"],
+    ["tiff", "TIFF"],
+  ]);
+  /** @type {HTMLInputElement[]} */
+  const formatInputs = [];
+  for (const [value, labelText] of formats) {
+    const label = el("label", "export-format-option");
+    const input = /** @type {HTMLInputElement} */ (el("input"));
+    input.type = "radio";
+    input.name = "export-format";
+    input.value = value;
+    input.checked = value === "png";
+    const span = el("span", "", labelText);
+    label.append(input, span);
+    formatGroup.append(label);
+    formatInputs.push(input);
+  }
+  formatGroup.prepend(formatLegend);
+
+  const sizeGroup = el("div", "export-size");
+  const widthLabel = el("label", "export-size-field");
+  const widthText = el("span", "", "WIDTH");
+  const widthInput = /** @type {HTMLInputElement} */ (el("input"));
+  widthInput.type = "number";
+  widthInput.inputMode = "numeric";
+  widthInput.min = "1";
+  widthInput.max = String(MAX_EXPORT_DIMENSION);
+  widthInput.step = "1";
+  widthLabel.append(widthText, widthInput);
+
+  const heightLabel = el("label", "export-size-field");
+  const heightText = el("span", "", "HEIGHT");
+  const heightInput = /** @type {HTMLInputElement} */ (el("input"));
+  heightInput.type = "number";
+  heightInput.inputMode = "numeric";
+  heightInput.min = "1";
+  heightInput.max = String(MAX_EXPORT_DIMENSION);
+  heightInput.step = "1";
+  heightLabel.append(heightText, heightInput);
+  sizeGroup.append(widthLabel, heightLabel);
+
+  const sizeTools = el("div", "export-size-tools");
+  const sourceSize = el("span", "export-source-size");
+  const resetSizeBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Reset Size")
+  );
+  resetSizeBtn.type = "button";
+  sizeTools.append(sourceSize, resetSizeBtn);
+
+  const actions = el("div", "export-dialog-actions");
+  const cancelBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Cancel")
+  );
+  cancelBtn.type = "button";
+  const submitBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "export-submit", "Export")
+  );
+  submitBtn.type = "submit";
+  actions.append(cancelBtn, submitBtn);
+  form.append(title, formatGroup, sizeGroup, sizeTools, actions);
+  dialog.append(form);
+  document.body.append(dialog);
+
+  /** @type {{ width: number, height: number }} */
+  let naturalExportSize = { width: 1, height: 1 };
+  let syncingSize = false;
+
+  function selectedFormat() {
+    return /** @type {"png" | "jpeg" | "tiff"} */ (
+      formatInputs.find((input) => input.checked)?.value ?? "png"
+    );
+  }
+
+  /** @param {number} value */
+  function clampSize(value) {
+    return Math.min(
+      Math.max(1, Math.round(Number.isFinite(value) ? value : 1)),
+      MAX_EXPORT_DIMENSION,
+    );
+  }
+
+  function syncSourceSize() {
+    sourceSize.textContent = `${naturalExportSize.width} × ${naturalExportSize.height} px`;
+  }
+
+  function resetExportSize() {
+    syncingSize = true;
+    widthInput.value = String(naturalExportSize.width);
+    heightInput.value = String(naturalExportSize.height);
+    syncingSize = false;
+  }
+
+  /** @param {"width" | "height"} source */
+  function syncBoundSize(source) {
+    if (syncingSize) return;
+    const ratio = naturalExportSize.width / naturalExportSize.height || 1;
+    syncingSize = true;
+    if (source === "width") {
+      const width = clampSize(widthInput.valueAsNumber);
+      widthInput.value = String(width);
+      heightInput.value = String(clampSize(width / ratio));
+    } else {
+      const height = clampSize(heightInput.valueAsNumber);
+      heightInput.value = String(height);
+      widthInput.value = String(clampSize(height * ratio));
+    }
+    syncingSize = false;
+  }
+
+  function openExportDialog() {
+    const size = getExportSize();
+    if (!size) return;
+    naturalExportSize = {
+      width: clampSize(size.width),
+      height: clampSize(size.height),
+    };
+    syncSourceSize();
+    resetExportSize();
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    widthInput.focus();
+    widthInput.select();
+  }
+
+  exportBtn.addEventListener("click", openExportDialog);
+  widthInput.addEventListener("input", () => syncBoundSize("width"));
+  heightInput.addEventListener("input", () => syncBoundSize("height"));
+  resetSizeBtn.addEventListener("click", resetExportSize);
+  cancelBtn.addEventListener("click", () => dialog.close());
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const width = clampSize(widthInput.valueAsNumber);
+    const height = clampSize(heightInput.valueAsNumber);
+    onExport({ format: selectedFormat(), width, height });
+    dialog.close();
+  });
 
   // Revert: drop every edit (sliders, crop, bypass) back to the
   // just-opened state.
@@ -233,9 +374,7 @@ export function buildPanel(
           btn.disabled = !enabled || bypassed.has(entry.title);
         }
       }
-      pngBtn.disabled = !enabled;
-      jpgBtn.disabled = !enabled;
-      tiffBtn.disabled = !enabled;
+      exportBtn.disabled = !enabled;
       revertBtn.disabled = !enabled;
     },
     /**
@@ -269,15 +408,18 @@ export function buildPanel(
      * @param {"png" | "jpeg" | "tiff"} [format] which export is running
      */
     setExportBusy(busy, format) {
-      pngBtn.disabled = busy;
-      jpgBtn.disabled = busy;
-      tiffBtn.disabled = busy;
-      pngBtn.textContent =
-        busy && format === "png" ? "Exporting…" : "Export PNG";
-      jpgBtn.textContent =
-        busy && format === "jpeg" ? "Exporting…" : "Export JPG";
-      tiffBtn.textContent =
-        busy && format === "tiff" ? "Exporting…" : "Export TIFF";
+      exportBtn.disabled = busy || !panelEnabled;
+      submitBtn.disabled = busy;
+      cancelBtn.disabled = busy;
+      resetSizeBtn.disabled = busy;
+      for (const input of [...formatInputs, widthInput, heightInput]) {
+        input.disabled = busy;
+      }
+      const suffix = format
+        ? ` ${format === "jpeg" ? "JPG" : format.toUpperCase()}`
+        : "";
+      exportBtn.textContent = busy ? `Exporting${suffix}…` : "Export...";
+      submitBtn.textContent = busy ? "Exporting..." : "Export";
     },
   };
 }

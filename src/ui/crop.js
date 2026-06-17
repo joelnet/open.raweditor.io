@@ -585,6 +585,16 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
     rect: () => ({ ...rect }),
     /** @returns {import("../tone/geometry.js").Geometry} */
     geometry: () => ({ orient, angle, flipH, flipV }),
+    /** @returns {{ width: number, height: number } | null} */
+    exportSize() {
+      if (!fullW || !fullH) return null;
+      const fw = orient % 2 ? fullH : fullW;
+      const fh = orient % 2 ? fullW : fullH;
+      return {
+        width: Math.max(Math.round(rect.w * fw), 1),
+        height: Math.max(Math.round(rect.h * fh), 1),
+      };
+    },
     isActive: () => active,
     reposition,
     reset,

@@ -19,6 +19,7 @@ export function createExporter() {
      * @param {number} previewWidth source-oriented preview width, so the
      *   presence pre-pass lands on the same frequency bands the preview
      *   showed (0 = unknown, treat full res as scale 1)
+     * @param {{ width: number, height: number }} targetSize encoded output size
      * @param {(done: number, total: number) => void} [onProgress]
      * @returns {Promise<Blob>}
      */
@@ -29,6 +30,7 @@ export function createExporter() {
       crop,
       geometry,
       previewWidth,
+      targetSize,
       onProgress,
     ) {
       if (!worker) {
@@ -48,7 +50,7 @@ export function createExporter() {
         w.onerror = (e) =>
           reject(new Error(e.message || "export worker error"));
         w.postMessage(
-          { image, settings, format, crop, geometry, previewWidth },
+          { image, settings, format, crop, geometry, previewWidth, targetSize },
           [image.data.buffer],
         );
       });

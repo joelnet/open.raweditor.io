@@ -1072,18 +1072,184 @@ button:disabled {
 .export-body {
   padding: 10px 12px 6px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
-.export-row {
-  display: flex;
-  gap: 6px;
-}
-
-.export-row button {
+.export-open {
   flex: 1;
   min-width: 0;
+}
+
+.export-open:hover:not(:disabled),
+.export-submit:hover:not(:disabled) {
+  color: var(--accent-green);
+  border-color: var(--accent-green);
+}
+
+.export-dialog {
+  width: min(420px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  margin: auto;
+  padding: 0;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 0.55);
+}
+
+.export-dialog::backdrop {
+  background: rgba(16, 20, 31, 0.72);
+}
+
+.export-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.export-dialog-title {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--panel-edge);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+}
+
+.export-format {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.export-format legend {
+  grid-column: 1 / -1;
+  padding: 0 0 2px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.export-format-option {
+  min-width: 0;
+}
+
+.export-format-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.export-format-option span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 7px 8px;
+  color: var(--muted);
+  background: var(--bg-deep);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.export-format-option input:checked + span {
+  color: var(--accent-green);
+  border-color: var(--accent-green);
+}
+
+.export-format-option input:focus-visible + span {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.export-size {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.export-size-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.export-size-field input {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 8px;
+  color: var(--text);
+  background: var(--bg-deep);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.export-size-field input:focus {
+  border-color: var(--accent-blue);
+  outline: none;
+}
+
+.export-size-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.export-source-size {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.export-size-tools button,
+.export-dialog-actions button {
+  padding: 6px 12px;
+}
+
+.export-size-tools button {
+  flex: 0 0 auto;
+}
+
+.export-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.export-submit {
+  min-width: 96px;
+}
+
+@media (max-width: 480px) {
+  .export-dialog {
+    width: calc(100vw - 16px);
+  }
+
+  .export-form {
+    padding: 12px;
+  }
+
+  .export-size-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .export-size-tools button,
+  .export-dialog-actions button {
+    min-height: 38px;
+  }
 }
 
 /* ---- status bar ---- */
