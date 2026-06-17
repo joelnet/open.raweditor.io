@@ -607,6 +607,7 @@ button:disabled {
 .revert-body {
   padding: 10px 12px 6px;
   display: flex;
+  gap: 8px;
 }
 
 .revert-body button {

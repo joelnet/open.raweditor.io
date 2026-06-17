@@ -44,12 +44,13 @@ function el(tag, className, text) {
  *           getExportSize: () => { width: number, height: number } | null,
  *           onBypassChange: () => void,
  *           onAuto: (title: string) => void,
- *           onRevert: () => void }} handlers
+ *           onRevert: () => void,
+ *           onClose: () => void }} handlers
  */
 export function buildPanel(
   container,
   store,
-  { onExport, getExportSize, onBypassChange, onAuto, onRevert },
+  { onExport, getExportSize, onBypassChange, onAuto, onRevert, onClose },
 ) {
   /** A key can have several rows (e.g. luminance in 3-way and detail views).
    * @type {{ key: string, input: HTMLInputElement, value: HTMLElement,
@@ -328,7 +329,7 @@ export function buildPanel(
   });
 
   // Revert: drop every edit (sliders, crop, bypass) back to the
-  // just-opened state.
+  // just-opened state. Close discards the image entirely.
   const revertSection = el("div", "section section-revert");
   const revertBody = el("div", "revert-body");
   const revertBtn = /** @type {HTMLButtonElement} */ (
@@ -337,7 +338,13 @@ export function buildPanel(
   revertBtn.type = "button";
   revertBtn.disabled = true;
   revertBtn.addEventListener("click", () => onRevert());
-  revertBody.append(revertBtn);
+  const closeBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Close")
+  );
+  closeBtn.type = "button";
+  closeBtn.disabled = true;
+  closeBtn.addEventListener("click", () => onClose());
+  revertBody.append(revertBtn, closeBtn);
   revertSection.append(revertBody);
 
   container.append(...sections, exportSection, revertSection);
@@ -376,6 +383,7 @@ export function buildPanel(
       }
       exportBtn.disabled = !enabled;
       revertBtn.disabled = !enabled;
+      closeBtn.disabled = !enabled;
     },
     /**
      * Settings with bypassed sections' sliders treated as zero — what the

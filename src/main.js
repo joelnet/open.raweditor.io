@@ -302,12 +302,35 @@ function onRevert() {
   layout();
 }
 
+// Close: discard the current image and return to the empty dropzone state.
+function onClose() {
+  if (!currentFile || opening) return;
+  spatialToken++; // invalidate any in-flight presence analysis
+  currentFile = null;
+  previewSize = null;
+  previewImage = null;
+  canvas.hidden = true;
+  dropzone.setVisible(true);
+  panel.setEnabled(false);
+  crop.setEnabled(false);
+  masks.setEnabled(false);
+  zoom.setEnabled(false);
+  histo.setHasImage(false);
+  histo.setExif(null);
+  panel.resetBypass();
+  masks.resetBypass();
+  store.set({ ...ZERO_SETTINGS });
+  status.setFile("No file loaded: drop a RAW file");
+  status.setProgress("");
+}
+
 const panel = buildPanel(panelScroll, store, {
   onExport,
   getExportSize: () => crop.exportSize(),
   onBypassChange: queueRender,
   onAuto,
   onRevert,
+  onClose,
 });
 initInstallPrompt(panelScroll);
 const dropzone = initDropzone({
