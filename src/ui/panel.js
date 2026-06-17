@@ -338,9 +338,7 @@ export function buildPanel(
   revertBtn.type = "button";
   revertBtn.disabled = true;
   revertBtn.addEventListener("click", () => onRevert());
-  const closeBtn = /** @type {HTMLButtonElement} */ (
-    el("button", "", "Close")
-  );
+  const closeBtn = /** @type {HTMLButtonElement} */ (el("button", "", "Close"));
   closeBtn.type = "button";
   closeBtn.disabled = true;
   closeBtn.addEventListener("click", () => onClose());
