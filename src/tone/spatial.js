@@ -834,7 +834,8 @@ export function applyPresencePrepass(
       (a.sharpening ?? 0) !== 0 ||
       (a.texture ?? 0) !== 0 ||
       (a.clarity ?? 0) !== 0 ||
-      (a.dehaze ?? 0) !== 0
+      (a.dehaze ?? 0) !== 0 ||
+      (a.lightBalance ?? 0) !== 0
     );
   });
   const localTextureClarity = masks.some((m) => {
@@ -845,6 +846,9 @@ export function applyPresencePrepass(
     (m) => (m.adjustments.sharpening ?? 0) !== 0,
   );
   const localDehaze = masks.some((m) => (m.adjustments.dehaze ?? 0) !== 0);
+  const localLightBalance = masks.some(
+    (m) => (m.adjustments.lightBalance ?? 0) !== 0,
+  );
   // Negative NOISE slider = wavelet-shrinkage denoise on the finest band
   // (positive NOISE is chromatic noise added in the display post-step).
   const nr = Math.max(-(settings.noise ?? 0), 0);
@@ -864,7 +868,7 @@ export function applyPresencePrepass(
   const maxVal = bits === 16 ? 65535 : 255;
   const luma = lumaFromImage(image);
   const lightBalanceW =
-    lightBalance !== 0
+    lightBalance !== 0 || localLightBalance
       ? computeLightBalanceWeightPlane(luma, width, height)
       : null;
   const aux =
@@ -978,6 +982,13 @@ export function applyPresencePrepass(
             r *= ratio;
             g *= ratio;
             b *= ratio;
+          }
+          const mlb = (a.lightBalance ?? 0) * mw;
+          if (lightBalanceW && mlb !== 0) {
+            const gain = lightBalanceGain(lightBalanceW[i], mlb);
+            r *= gain;
+            g *= gain;
+            b *= gain;
           }
         }
       }

@@ -180,6 +180,24 @@ test("applyPresencePrepass applies Light Balance as an RGB ratio", () => {
   assert.ok(bright > 1);
 });
 
+test("applyPresencePrepass applies local Light Balance through mask coverage", () => {
+  const full = createBrushMask(2, 1);
+  full.coverage?.fill(255);
+  full.adjustments = { ...full.adjustments, lightBalance: 1 };
+  const img = grayImage(8, 2, (x) => (x < 4 ? 0.04 : 0.8));
+  const before = img.data.slice();
+  applyPresencePrepass(img, { ...ZERO_SETTINGS, masks: [full] }, 1);
+  assert.ok(img.data[0] > before[0]);
+  assert.ok(img.data[7 * 3] > before[7 * 3]);
+
+  const empty = createBrushMask(2, 1);
+  empty.adjustments = { ...empty.adjustments, lightBalance: 1 };
+  const untouched = grayImage(8, 2, (x) => (x < 4 ? 0.04 : 0.8));
+  const untouchedBefore = untouched.data.slice();
+  applyPresencePrepass(untouched, { ...ZERO_SETTINGS, masks: [empty] }, 1);
+  assert.deepEqual(untouched.data, untouchedBefore);
+});
+
 test("computeDeltaPlane matches per-pixel evaluation of the detail planes", () => {
   // the drift guard: the export path's fused accumulation must equal what
   // the shader computes from the preview's detail planes

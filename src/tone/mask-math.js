@@ -10,8 +10,8 @@ import { MASK } from "./constants.js";
  * Per-mask local adjustments — the same keys and scales as the global
  * sliders, so the local math can reuse the TONE constants verbatim.
  * @typedef {{ temp: number, tint: number, exposure: number,
- *             contrast: number, highlights: number, shadows: number,
- *             whites: number, blacks: number, sharpening: number,
+ *             contrast: number, lightBalance: number, highlights: number,
+ *             shadows: number, whites: number, blacks: number, sharpening: number,
  *             texture: number, clarity: number, dehaze: number,
  *             vibrance: number, saturation: number }} MaskAdjustments
  */
@@ -49,6 +49,7 @@ export const ZERO_MASK_ADJUSTMENTS = Object.freeze({
   tint: 0,
   exposure: 0,
   contrast: 0,
+  lightBalance: 0,
   highlights: 0,
   shadows: 0,
   whites: 0,

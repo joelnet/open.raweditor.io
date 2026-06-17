@@ -129,7 +129,7 @@ uniform vec4 u_maskGeo[${MASK.MAX}];   // x, y (UV), angle (rad), type (0 linear
 uniform vec4 u_maskParam[${MASK.MAX}]; // linear: range,-,-,invert | radial: rx, ry, feather, invert | brush: -, layer, -, invert
 uniform vec4 u_maskAdjA[${MASK.MAX}];  // temp, tint, exposure, contrast
 uniform vec4 u_maskAdjB[${MASK.MAX}];  // highlights, shadows, whites, blacks
-uniform vec4 u_maskAdjC[${MASK.MAX}];  // vibrance, saturation, -, -
+uniform vec4 u_maskAdjC[${MASK.MAX}];  // vibrance, saturation, light balance, -
 uniform vec4 u_maskAdjD[${MASK.MAX}];  // sharpening, texture, clarity, dehaze
 uniform int u_maskOverlay;             // mask index to tint red, -1 = off
 // Brush (drawn) mask coverage: one R8 layer per brush-mask slot, LINEAR
@@ -563,6 +563,16 @@ void main() {
       float mw = maskWeight(v_uv, u_frame, u_maskGeo[i], u_maskParam[i]);
       if (mw > 0.0) {
         rgb = applyMaskPresence(rgb, ySrc, p, mw, u_maskAdjD[i]);
+        float mlb = u_maskAdjC[i].z * mw;
+        if (mlb != 0.0) {
+          float lbw = texelFetch(u_lightBalanceW, p, 0).r;
+          float gain = clamp(
+            1.0 + ${f(TONE.LIGHT_BALANCE_STRENGTH)} * mlb * lbw,
+            ${f(TONE.LIGHT_BALANCE_GAIN_RANGE[0])},
+            ${f(TONE.LIGHT_BALANCE_GAIN_RANGE[1])}
+          );
+          rgb *= gain;
+        }
       }
     }
     if (u_lightBalance != 0.0) {

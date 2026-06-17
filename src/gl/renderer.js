@@ -327,7 +327,7 @@ export function createRenderer(canvas) {
       maskAdjB[o + 3] = a.blacks;
       maskAdjC[o] = a.vibrance;
       maskAdjC[o + 1] = a.saturation;
-      maskAdjC[o + 2] = 0;
+      maskAdjC[o + 2] = a.lightBalance ?? 0;
       maskAdjC[o + 3] = 0;
       maskAdjD[o] = a.sharpening ?? 0;
       maskAdjD[o + 1] = a.texture ?? 0;
