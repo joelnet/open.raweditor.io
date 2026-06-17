@@ -1,4 +1,4 @@
-// Collapsible sidebar sections: a +/- toggle prepended to each section
+// Collapsible sidebar sections: a disclosure-triangle toggle prepended to each section
 // header that hides the section body (everything in the .section except the
 // header). All sections start collapsed except the always-open ones
 // (EXPORT, REVERT, and INSTALL if it ever exists), which have no toggle.
@@ -45,7 +45,7 @@ export function initCollapse(container) {
 
     const sync = () => {
       const collapsed = section.classList.contains("collapsed");
-      toggle.textContent = collapsed ? "+" : "−"; // + / − (minus sign)
+      toggle.textContent = collapsed ? "▸" : "▾"; // ▸ collapsed (right) / ▾ open (down)
       toggle.setAttribute("aria-expanded", String(!collapsed));
       toggle.setAttribute(
         "aria-label",
