@@ -20,6 +20,7 @@ import {
   applyPresencePrepass,
 } from "../spatial.js";
 import { ZERO_SETTINGS } from "../tone-math.js";
+import { createBrushMask } from "../mask-math.js";
 
 const EPS = 1e-6;
 
@@ -245,6 +246,20 @@ test("applyPresencePrepass: positive texture adds local contrast, negative remov
   const smoothed = make();
   applyPresencePrepass(smoothed, { ...ZERO_SETTINGS, texture: -1 }, 1);
   assert.ok(variance(smoothed.data) < base, "texture -1 must smooth detail");
+});
+
+test("applyPresencePrepass: full mask local texture matches global texture", () => {
+  const make = () => grayImage(32, 24, (x, y) => 0.4 + 0.1 * rand(y * 32 + x));
+  const global = make();
+  applyPresencePrepass(global, { ...ZERO_SETTINGS, texture: 1 }, 1);
+
+  const mask = createBrushMask(32, 24);
+  mask.coverage.fill(255);
+  mask.adjustments = { ...mask.adjustments, texture: 1 };
+  const local = make();
+  applyPresencePrepass(local, { ...ZERO_SETTINGS, masks: [mask] }, 1);
+
+  assert.deepEqual(local.data, global.data);
 });
 
 test("applyPresencePrepass: sharpening increases local contrast", () => {

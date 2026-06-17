@@ -28,101 +28,148 @@ const BRUSH_SIZE_MAX = 0.4;
 /**
  * Sliders for the selected mask's adjustments — same scales as the global
  * sliders so local edits feel identical.
- * @type {readonly { key: keyof import("../tone/mask-math.js").MaskAdjustments,
- *                   label: string, min: number, max: number, step: number,
- *                   scale: number, decimals: number }[]}
+ * @type {readonly (readonly {
+ *   key: keyof import("../tone/mask-math.js").MaskAdjustments,
+ *   label: string, min: number, max: number, step: number,
+ *   scale: number, decimals: number, signed?: boolean
+ * }[])[]}
  */
-const ADJ_SLIDERS = [
-  {
-    key: "temp",
-    label: "TEMP",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
-  {
-    key: "tint",
-    label: "TINT",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
-  {
-    key: "exposure",
-    label: "EXPOSURE",
-    min: -5,
-    max: 5,
-    step: 0.05,
-    scale: 1,
-    decimals: 2,
-  },
-  {
-    key: "contrast",
-    label: "CONTRAST",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
-  {
-    key: "highlights",
-    label: "HIGHLIGHTS",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
-  {
-    key: "shadows",
-    label: "SHADOWS",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
-  {
-    key: "whites",
-    label: "WHITES",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
-  {
-    key: "blacks",
-    label: "BLACKS",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
-  {
-    key: "vibrance",
-    label: "VIBRANCE",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
-  {
-    key: "saturation",
-    label: "SATURATION",
-    min: -100,
-    max: 100,
-    step: 1,
-    scale: 0.01,
-    decimals: 0,
-  },
+const ADJ_SLIDER_GROUPS = [
+  [
+    {
+      key: "temp",
+      label: "TEMP",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+    {
+      key: "tint",
+      label: "TINT",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+  ],
+  [
+    {
+      key: "exposure",
+      label: "EXPOSURE",
+      min: -5,
+      max: 5,
+      step: 0.05,
+      scale: 1,
+      decimals: 2,
+    },
+    {
+      key: "contrast",
+      label: "CONTRAST",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+    {
+      key: "highlights",
+      label: "HIGHLIGHTS",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+    {
+      key: "shadows",
+      label: "SHADOWS",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+    {
+      key: "whites",
+      label: "WHITES",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+    {
+      key: "blacks",
+      label: "BLACKS",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+  ],
+  [
+    {
+      key: "sharpening",
+      label: "SHARPEN",
+      min: 0,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+      signed: false,
+    },
+    {
+      key: "texture",
+      label: "TEXTURE",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+    {
+      key: "clarity",
+      label: "CLARITY",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+    {
+      key: "dehaze",
+      label: "DEHAZE",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+  ],
+  [
+    {
+      key: "vibrance",
+      label: "VIBRANCE",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+    {
+      key: "saturation",
+      label: "SATURATION",
+      min: -100,
+      max: 100,
+      step: 1,
+      scale: 0.01,
+      decimals: 0,
+    },
+  ],
 ];
 
 /**
@@ -465,20 +512,27 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   // flow, feather) and the adjustment sliders (temp, exposure, …) below
   const adjDivider = el("div", "mask-divider");
   detail.append(tools, brushControls, featherRow, adjDivider);
-  for (const def of ADJ_SLIDERS) {
-    detail.append(
-      makeRow(
-        def,
-        (m) => m.adjustments[def.key],
-        (raw) => {
-          const m = masks[selected];
-          if (!m) return;
-          patchSelected({
-            adjustments: { ...m.adjustments, [def.key]: raw * def.scale },
-          });
-        },
-      ),
-    );
+  for (
+    let groupIndex = 0;
+    groupIndex < ADJ_SLIDER_GROUPS.length;
+    groupIndex++
+  ) {
+    if (groupIndex > 0) detail.append(el("div", "mask-divider"));
+    for (const def of ADJ_SLIDER_GROUPS[groupIndex]) {
+      detail.append(
+        makeRow(
+          def,
+          (m) => m.adjustments[def.key],
+          (raw) => {
+            const m = masks[selected];
+            if (!m) return;
+            patchSelected({
+              adjustments: { ...m.adjustments, [def.key]: raw * def.scale },
+            });
+          },
+        ),
+      );
+    }
   }
 
   // --- viewport overlay: geometry editing ---

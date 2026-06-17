@@ -136,6 +136,7 @@ export function createRenderer(canvas) {
   const locMaskAdjA = gl.getUniformLocation(program, "u_maskAdjA");
   const locMaskAdjB = gl.getUniformLocation(program, "u_maskAdjB");
   const locMaskAdjC = gl.getUniformLocation(program, "u_maskAdjC");
+  const locMaskAdjD = gl.getUniformLocation(program, "u_maskAdjD");
   const locMaskOverlay = gl.getUniformLocation(program, "u_maskOverlay");
   const locHsl = gl.getUniformLocation(program, "u_hsl");
   const locHasAux = gl.getUniformLocation(program, "u_hasAux");
@@ -159,6 +160,7 @@ export function createRenderer(canvas) {
   const maskAdjA = new Float32Array(MASK.MAX * 4);
   const maskAdjB = new Float32Array(MASK.MAX * 4);
   const maskAdjC = new Float32Array(MASK.MAX * 4);
+  const maskAdjD = new Float32Array(MASK.MAX * 4);
 
   // Brush (drawn) mask coverage lives in an R8 TEXTURE_2D_ARRAY on unit 4
   // (one layer per mask slot), LINEAR filtered so the GPU's bilinear fetch
@@ -324,6 +326,10 @@ export function createRenderer(canvas) {
       maskAdjC[o + 1] = a.saturation;
       maskAdjC[o + 2] = 0;
       maskAdjC[o + 3] = 0;
+      maskAdjD[o] = a.sharpening ?? 0;
+      maskAdjD[o + 1] = a.texture ?? 0;
+      maskAdjD[o + 2] = a.clarity ?? 0;
+      maskAdjD[o + 3] = a.dehaze ?? 0;
     }
     gl.uniform1i(locMaskCount, count);
     gl.uniform4fv(locMaskGeo, maskGeo);
@@ -331,6 +337,7 @@ export function createRenderer(canvas) {
     gl.uniform4fv(locMaskAdjA, maskAdjA);
     gl.uniform4fv(locMaskAdjB, maskAdjB);
     gl.uniform4fv(locMaskAdjC, maskAdjC);
+    gl.uniform4fv(locMaskAdjD, maskAdjD);
     gl.uniform1i(locMaskOverlay, maskOverlay < count ? maskOverlay : -1);
     // bring the brush coverage array up to date (uploads only changed
     // layers; no-op when there are no brush masks)

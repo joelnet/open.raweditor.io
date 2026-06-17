@@ -23,7 +23,7 @@ ctx.onmessage = async (/** @type {MessageEvent} */ e) => {
     const scale = previewWidth
       ? Math.max(1, Math.round(image.width / previewWidth))
       : 1;
-    applyPresencePrepass(image, settings, scale);
+    applyPresencePrepass(image, settings, scale, geometry);
     // The crop rect lives on the oriented (frame) pixel grid.
     const frame = orientedDims(geometry.orient, image.width, image.height);
     const rect = cropPixelRect(crop, frame.width, frame.height);

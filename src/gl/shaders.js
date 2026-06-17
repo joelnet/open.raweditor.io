@@ -128,6 +128,7 @@ uniform vec4 u_maskParam[${MASK.MAX}]; // linear: range,-,-,invert | radial: rx,
 uniform vec4 u_maskAdjA[${MASK.MAX}];  // temp, tint, exposure, contrast
 uniform vec4 u_maskAdjB[${MASK.MAX}];  // highlights, shadows, whites, blacks
 uniform vec4 u_maskAdjC[${MASK.MAX}];  // vibrance, saturation, -, -
+uniform vec4 u_maskAdjD[${MASK.MAX}];  // sharpening, texture, clarity, dehaze
 uniform int u_maskOverlay;             // mask index to tint red, -1 = off
 // Brush (drawn) mask coverage: one R8 layer per brush-mask slot, LINEAR
 // filtered so the bilinear fetch matches sampleCoverage() in mask-math.js.
@@ -331,12 +332,12 @@ const float HSL_CENTERS[${HSL.CENTERS.length}] = float[${HSL.CENTERS.length}](
 // One à trous band's texture boost — mirrors textureDelta() in spatial.js.
 // Positive: amplify what exceeds the band's noise floor; negative:
 // attenuate the band, floored so edges never fully dissolve.
-float textureDelta(float d, float w, float tau) {
-  if (u_texture >= 0.0) {
-    return u_texture * ${f(SPATIAL.TEXTURE_GAIN)} * w
+float textureDelta(float d, float w, float tau, float s) {
+  if (s >= 0.0) {
+    return s * ${f(SPATIAL.TEXTURE_GAIN)} * w
       * sign(d) * max(abs(d) - tau, 0.0);
   }
-  return (max(1.0 + u_texture * w, ${f(SPATIAL.TEXTURE_MIN_GAIN)}) - 1.0) * d;
+  return (max(1.0 + s * w, ${f(SPATIAL.TEXTURE_MIN_GAIN)}) - 1.0) * d;
 }
 
 // Finest-band soft-threshold coring for denoise — mirrors nrDelta() in
@@ -444,6 +445,50 @@ vec3 applyMaskAdjust(vec3 rgb, float m, vec4 adjA, vec4 adjB, vec4 adjC) {
   return rgb;
 }
 
+vec3 applyMaskPresence(vec3 rgb, float ySrc, ivec2 p, float m, vec4 adjD) {
+  float dehaze = adjD.w * m;
+  if (dehaze != 0.0) {
+    float D = texelFetch(u_dehazeD, p, 0).r;
+    float t = max(1.0 - ${f(SPATIAL.DEHAZE_OMEGA)} * dehaze * D,
+      ${f(SPATIAL.DEHAZE_T_MIN)});
+    rgb = max((rgb - u_airlight) / t + u_airlight, 0.0);
+  }
+
+  float sharpening = adjD.x * m;
+  if (sharpening > 0.0) {
+    float delta = texelFetch(u_sharpenD, p, 0).r;
+    float yNew = max(ySrc + sharpening * delta, 0.0);
+    rgb *= clamp(yNew / max(ySrc, 1e-5), 0.0, ${f(SPATIAL.RATIO_MAX)});
+  }
+
+  float texture = adjD.y * m;
+  float clarity = adjD.z * m;
+  if (texture != 0.0 || clarity != 0.0) {
+    float y0 = pow(max(ySrc, 0.0), 1.0 / ${f(SPATIAL.GAMMA)});
+    vec4 c = texelFetch(u_detail, p, 0);
+    float delta = 0.0;
+    if (texture != 0.0) {
+      delta += textureDelta(y0 - c.x,
+        ${f(SPATIAL.TEXTURE_WEIGHTS[0])}, ${f(SPATIAL.TEXTURE_THRESH[0])}, texture);
+      delta += textureDelta(c.x - c.y,
+        ${f(SPATIAL.TEXTURE_WEIGHTS[1])}, ${f(SPATIAL.TEXTURE_THRESH[1])}, texture);
+      delta += textureDelta(c.y - c.z,
+        ${f(SPATIAL.TEXTURE_WEIGHTS[2])}, ${f(SPATIAL.TEXTURE_THRESH[2])}, texture);
+    }
+    if (clarity != 0.0) {
+      float d = y0 - c.w;
+      float mid = clamp(4.0 * y0 * (1.0 - y0), 0.0, 1.0);
+      delta += clarity * ${f(SPATIAL.CLARITY_GAIN)} * mid * d
+        * exp(-${f(SPATIAL.CLARITY_ROLLOFF)} * d * d);
+    }
+    float yNew = max(y0 + delta, 0.0);
+    rgb *= clamp(pow(yNew, ${f(SPATIAL.GAMMA)}) / max(ySrc, 1e-5),
+      0.0, ${f(SPATIAL.RATIO_MAX)});
+  }
+
+  return rgb;
+}
+
 vec2 frameToSourceUv(vec2 uv) {
   // flip first, in frame UV (mirrors frameToSource in tone/geometry.js:
   // f.x → 1 - f.x, f.y → 1 - f.y) so it composes the same way under the
@@ -493,11 +538,11 @@ void main() {
       if (nr > 0.0) delta += nrDelta(y0 - c.x, nr);
       if (u_texture != 0.0) {
         delta += textureDelta(y0 - c.x,
-          ${f(SPATIAL.TEXTURE_WEIGHTS[0])}, ${f(SPATIAL.TEXTURE_THRESH[0])});
+          ${f(SPATIAL.TEXTURE_WEIGHTS[0])}, ${f(SPATIAL.TEXTURE_THRESH[0])}, u_texture);
         delta += textureDelta(c.x - c.y,
-          ${f(SPATIAL.TEXTURE_WEIGHTS[1])}, ${f(SPATIAL.TEXTURE_THRESH[1])});
+          ${f(SPATIAL.TEXTURE_WEIGHTS[1])}, ${f(SPATIAL.TEXTURE_THRESH[1])}, u_texture);
         delta += textureDelta(c.y - c.z,
-          ${f(SPATIAL.TEXTURE_WEIGHTS[2])}, ${f(SPATIAL.TEXTURE_THRESH[2])});
+          ${f(SPATIAL.TEXTURE_WEIGHTS[2])}, ${f(SPATIAL.TEXTURE_THRESH[2])}, u_texture);
       }
       if (u_clarity != 0.0) {
         // clarityDelta(): exp rolloff starves large edges (halos), the
@@ -510,6 +555,13 @@ void main() {
       float yNew = max(y0 + delta, 0.0);
       rgb *= clamp(pow(yNew, ${f(SPATIAL.GAMMA)}) / max(ySrc, 1e-5),
         0.0, ${f(SPATIAL.RATIO_MAX)});
+    }
+    for (int i = 0; i < ${MASK.MAX}; i++) {
+      if (i >= u_maskCount) break;
+      float mw = maskWeight(v_uv, u_frame, u_maskGeo[i], u_maskParam[i]);
+      if (mw > 0.0) {
+        rgb = applyMaskPresence(rgb, ySrc, p, mw, u_maskAdjD[i]);
+      }
     }
   }
 

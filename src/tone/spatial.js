@@ -19,6 +19,8 @@
 
 import { LUMA, SPATIAL, NR } from "./constants.js";
 import { decodeInput, encodeInput } from "./tone-math.js";
+import { prepareMask, maskWeight } from "./mask-math.js";
+import { ZERO_GEOMETRY, orientedDims, coverScale } from "./geometry.js";
 
 // --- luminance planes -------------------------------------------------
 
@@ -379,6 +381,73 @@ export function computeDeltaPlane(luma, w, h, scale, texture, clarity, nr = 0) {
   return delta;
 }
 
+/**
+ * Per-pixel counterpart to computeDeltaPlane(), used when local masks need
+ * different texture/clarity strengths at each pixel.
+ * @param {number} y0 gamma-domain source luma
+ * @param {number} c1 @param {number} c2 @param {number} c3
+ * @param {number} base clarity residual plane value
+ * @param {number} texture
+ * @param {number} clarity
+ * @param {number} [nr]
+ */
+function detailDeltaAt(y0, c1, c2, c3, base, texture, clarity, nr = 0) {
+  let delta = 0;
+  if (nr > 0) delta += nrDelta(y0 - c1, nr);
+  if (texture !== 0) {
+    delta += textureDelta(y0 - c1, 0, texture);
+    delta += textureDelta(c1 - c2, 1, texture);
+    delta += textureDelta(c2 - c3, 2, texture);
+  }
+  if (clarity !== 0) delta += clarityDelta(y0 - base, y0, clarity);
+  return delta;
+}
+
+/**
+ * Inverse of frameToSource(), for assigning frame-space mask weights to a
+ * source pixel during the export presence prepass.
+ * @param {import("./geometry.js").Geometry} g
+ * @param {number} sx source x
+ * @param {number} sy source y
+ * @param {number} srcW
+ * @param {number} srcH
+ */
+function sourceToFrame(g, sx, sy, srcW, srcH) {
+  const { width: fw, height: fh } = orientedDims(g.orient, srcW, srcH);
+  let qx;
+  let qy;
+  switch (g.orient & 3) {
+    case 1:
+      qx = srcH - sy;
+      qy = sx;
+      break;
+    case 2:
+      qx = srcW - sx;
+      qy = srcH - sy;
+      break;
+    case 3:
+      qx = sy;
+      qy = srcW - sx;
+      break;
+    default:
+      qx = sx;
+      qy = sy;
+  }
+  if (g.angle !== 0) {
+    const t = (g.angle * Math.PI) / 180;
+    const c = Math.cos(t);
+    const s = Math.sin(t);
+    const k = coverScale(g.angle, fw, fh);
+    const px = qx - fw / 2;
+    const py = qy - fh / 2;
+    qx = (c * px - s * py) * k + fw / 2;
+    qy = (s * px + c * py) * k + fh / 2;
+  }
+  if (g.flipH) qx = fw - qx;
+  if (g.flipV) qy = fh - qy;
+  return [qx, qy];
+}
+
 // --- dehaze analysis (dark channel prior, low resolution) ---------------
 
 /**
@@ -688,12 +757,36 @@ export function computeDehazePlane(aux, luma, w, h) {
  *           colors: number, bits: number }} image
  * @param {import("./tone-math.js").ToneSettings} settings
  * @param {number} [scale] integer ≥ 1
+ * @param {import("./geometry.js").Geometry} [geometry]
  */
-export function applyPresencePrepass(image, settings, scale = 1) {
+export function applyPresencePrepass(
+  image,
+  settings,
+  scale = 1,
+  geometry = ZERO_GEOMETRY,
+) {
   const sharpening = settings.sharpening ?? 0;
   const texture = settings.texture ?? 0;
   const clarity = settings.clarity ?? 0;
   const dehaze = settings.dehaze ?? 0;
+  const masks = settings.masks ?? [];
+  const localPresence = masks.some((m) => {
+    const a = m.adjustments;
+    return (
+      (a.sharpening ?? 0) !== 0 ||
+      (a.texture ?? 0) !== 0 ||
+      (a.clarity ?? 0) !== 0 ||
+      (a.dehaze ?? 0) !== 0
+    );
+  });
+  const localTextureClarity = masks.some((m) => {
+    const a = m.adjustments;
+    return (a.texture ?? 0) !== 0 || (a.clarity ?? 0) !== 0;
+  });
+  const localSharpening = masks.some(
+    (m) => (m.adjustments.sharpening ?? 0) !== 0,
+  );
+  const localDehaze = masks.some((m) => (m.adjustments.dehaze ?? 0) !== 0);
   // Negative NOISE slider = wavelet-shrinkage denoise on the finest band
   // (positive NOISE is chromatic noise added in the display post-step).
   const nr = Math.max(-(settings.noise ?? 0), 0);
@@ -702,7 +795,8 @@ export function applyPresencePrepass(image, settings, scale = 1) {
     texture === 0 &&
     clarity === 0 &&
     dehaze === 0 &&
-    nr === 0
+    nr === 0 &&
+    !localPresence
   ) {
     return;
   }
@@ -711,14 +805,24 @@ export function applyPresencePrepass(image, settings, scale = 1) {
   const maxVal = bits === 16 ? 65535 : 255;
   const luma = lumaFromImage(image);
   const aux =
-    dehaze !== 0 ? computeDehazeAux(downsampleRgbFromImage(image)) : null;
+    dehaze !== 0 || localDehaze
+      ? computeDehazeAux(downsampleRgbFromImage(image))
+      : null;
+  const detail = localTextureClarity
+    ? computeDetailPlanes(luma, width, height, scale)
+    : null;
   const delta =
-    texture !== 0 || clarity !== 0 || nr > 0
+    !detail && (texture !== 0 || clarity !== 0 || nr > 0)
       ? computeDeltaPlane(luma, width, height, scale, texture, clarity, nr)
       : null;
   const sharpenDelta =
-    sharpening !== 0
+    sharpening !== 0 || localSharpening
       ? computeSharpenDeltaPlane(luma, width, height, scale)
+      : null;
+  const frame = orientedDims(geometry.orient, width, height);
+  const prepared =
+    localPresence && masks.length
+      ? masks.map((mk) => prepareMask(mk, frame.width, frame.height))
       : null;
 
   for (let y = 0; y < height; y++) {
@@ -729,7 +833,8 @@ export function applyPresencePrepass(image, settings, scale = 1) {
       let r = decodeInput(data[p] / maxVal);
       let g = decodeInput(data[p + 1] / maxVal);
       let b = decodeInput(data[p + 2] / maxVal);
-      if (aux) {
+      const ySrc = luma[i];
+      if (aux && dehaze !== 0) {
         const D = dehazeAmount(aux, (x + 0.5) / width, v, luma[i]);
         const t = dehazeTransmission(D, dehaze);
         const [ar, ag, ab] = aux.airlight;
@@ -738,16 +843,80 @@ export function applyPresencePrepass(image, settings, scale = 1) {
         b = Math.max((b - ab) / t + ab, 0);
       }
       if (delta) {
-        const ratio = presenceRatio(luma[i], delta[i]);
+        const ratio = presenceRatio(ySrc, delta[i]);
+        r *= ratio;
+        g *= ratio;
+        b *= ratio;
+      } else if (detail && (texture !== 0 || clarity !== 0 || nr > 0)) {
+        const y0 = Math.pow(Math.max(ySrc, 0), 1 / SPATIAL.GAMMA);
+        const d = detailDeltaAt(
+          y0,
+          detail.c1[i],
+          detail.c2[i],
+          detail.c3[i],
+          detail.base[i],
+          texture,
+          clarity,
+          nr,
+        );
+        const ratio = presenceRatio(ySrc, d);
         r *= ratio;
         g *= ratio;
         b *= ratio;
       }
-      if (sharpenDelta) {
-        const ratio = sharpenRatio(luma[i], sharpenDelta[i], sharpening);
+      if (sharpenDelta && sharpening !== 0) {
+        const ratio = sharpenRatio(ySrc, sharpenDelta[i], sharpening);
         r *= ratio;
         g *= ratio;
         b *= ratio;
+      }
+      if (prepared) {
+        const [fx, fy] = sourceToFrame(
+          geometry,
+          x + 0.5,
+          y + 0.5,
+          width,
+          height,
+        );
+        for (let mi = 0; mi < masks.length; mi++) {
+          const a = masks[mi].adjustments;
+          const mw = maskWeight(prepared[mi], fx, fy);
+          if (mw <= 0) continue;
+          const md = (a.dehaze ?? 0) * mw;
+          if (aux && md !== 0) {
+            const D = dehazeAmount(aux, (x + 0.5) / width, v, ySrc);
+            const t = dehazeTransmission(D, md);
+            const [ar, ag, ab] = aux.airlight;
+            r = Math.max((r - ar) / t + ar, 0);
+            g = Math.max((g - ag) / t + ag, 0);
+            b = Math.max((b - ab) / t + ab, 0);
+          }
+          const ms = (a.sharpening ?? 0) * mw;
+          if (sharpenDelta && ms > 0) {
+            const ratio = sharpenRatio(ySrc, sharpenDelta[i], ms);
+            r *= ratio;
+            g *= ratio;
+            b *= ratio;
+          }
+          const mt = (a.texture ?? 0) * mw;
+          const mc = (a.clarity ?? 0) * mw;
+          if (detail && (mt !== 0 || mc !== 0)) {
+            const y0 = Math.pow(Math.max(ySrc, 0), 1 / SPATIAL.GAMMA);
+            const d = detailDeltaAt(
+              y0,
+              detail.c1[i],
+              detail.c2[i],
+              detail.c3[i],
+              detail.base[i],
+              mt,
+              mc,
+            );
+            const ratio = presenceRatio(ySrc, d);
+            r *= ratio;
+            g *= ratio;
+            b *= ratio;
+          }
+        }
       }
       data[p] = Math.min(Math.max(encodeInput(r) * maxVal + 0.5, 0), maxVal);
       data[p + 1] = Math.min(
