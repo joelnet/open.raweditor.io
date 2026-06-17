@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import { SPATIAL, NR } from "../constants.js";
 import {
   atrousPass,
+  gaussianBlur,
   computeDetailPlanes,
+  computeSharpenDeltaPlane,
   computeDeltaPlane,
   textureDelta,
   clarityDelta,
   nrDelta,
   presenceRatio,
+  sharpenRatio,
   dehazeTransmission,
   computeDehazeAux,
   downsampleRgbFromImage,
@@ -54,6 +57,21 @@ test("atrousPass leaves a flat plane unchanged", () => {
     for (let i = 0; i < dst.length; i++) {
       assert.ok(Math.abs(dst[i] - 0.42) < EPS, `step ${step}, i ${i}`);
     }
+  }
+});
+
+test("gaussianBlur leaves a flat plane unchanged", () => {
+  const w = 16;
+  const h = 12;
+  const src = new Float32Array(w * h).fill(0.37);
+  const dst = new Float32Array(w * h);
+  const tmp = new Float32Array(w * h);
+  gaussianBlur(src, dst, tmp, w, h, {
+    kernel: new Float32Array([0.25, 0.5, 0.25]),
+    radius: 1,
+  });
+  for (let i = 0; i < dst.length; i++) {
+    assert.ok(Math.abs(dst[i] - 0.37) < EPS, `pixel ${i}`);
   }
 });
 
@@ -108,6 +126,13 @@ test("presenceRatio: identity at zero delta, capped at RATIO_MAX", () => {
   assert.ok(presenceRatio(1e-7, 1) <= SPATIAL.RATIO_MAX);
 });
 
+test("sharpenRatio: amount blends a linear luma delta and caps gain", () => {
+  assert.equal(sharpenRatio(0.18, 0.2, 0), 1);
+  assert.ok(sharpenRatio(0.18, 0.2, 0.5) > 1);
+  assert.ok(sharpenRatio(0.18, -0.1, 1) < 1);
+  assert.ok(sharpenRatio(1e-7, 1, 1) <= SPATIAL.RATIO_MAX);
+});
+
 test("dehazeTransmission: identity at zero, floored, haze re-add above 1", () => {
   assert.equal(dehazeTransmission(0.5, 0), 1);
   assert.equal(
@@ -137,6 +162,43 @@ test("computeDeltaPlane matches per-pixel evaluation of the detail planes", () =
       clarityDelta(y0 - base[i], y0, clarity);
     assert.ok(Math.abs(delta[i] - expected) < 1e-5, `pixel ${i}`);
   }
+});
+
+test("computeSharpenDeltaPlane leaves flat luma unchanged", () => {
+  const w = 24;
+  const h = 16;
+  const luma = new Float32Array(w * h).fill(0.42);
+  const delta = computeSharpenDeltaPlane(luma, w, h);
+  for (let i = 0; i < delta.length; i++) {
+    assert.ok(Math.abs(delta[i]) < 1e-5, `pixel ${i}`);
+  }
+});
+
+test("computeSharpenDeltaPlane concentrates a blurred point", () => {
+  const w = 33;
+  const h = 33;
+  const cx = 16;
+  const cy = 16;
+  const sigma = 1.4;
+  const luma = new Float32Array(w * h);
+  let peakNeighbor = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const d2 = (x - cx) ** 2 + (y - cy) ** 2;
+      const v = 0.7 * Math.exp(-d2 / (2 * sigma * sigma));
+      luma[y * w + x] = v;
+      if (Math.abs(x - cx) + Math.abs(y - cy) === 1) {
+        peakNeighbor = Math.max(peakNeighbor, v);
+      }
+    }
+  }
+  const delta = computeSharpenDeltaPlane(luma, w, h);
+  const center = cy * w + cx;
+  assert.ok(delta[center] > 0, "center must sharpen upward");
+  assert.ok(
+    luma[center] + delta[center] > peakNeighbor,
+    "deconvolved center must stand above its blurred neighbors",
+  );
 });
 
 test("dehaze plane stays in [0, 1] and tracks haze density", () => {
@@ -183,6 +245,24 @@ test("applyPresencePrepass: positive texture adds local contrast, negative remov
   const smoothed = make();
   applyPresencePrepass(smoothed, { ...ZERO_SETTINGS, texture: -1 }, 1);
   assert.ok(variance(smoothed.data) < base, "texture -1 must smooth detail");
+});
+
+test("applyPresencePrepass: sharpening increases local contrast", () => {
+  /** @param {Uint16Array} data */
+  function variance(data) {
+    let mean = 0;
+    for (let i = 0; i < data.length; i += 3) mean += data[i];
+    mean /= data.length / 3;
+    let v = 0;
+    for (let i = 0; i < data.length; i += 3) v += (data[i] - mean) ** 2;
+    return v / (data.length / 3);
+  }
+  const make = () =>
+    grayImage(32, 24, (x, y) => 0.35 + 0.2 * Math.sin(x / 4) * Math.sin(y / 4));
+  const base = variance(make().data);
+  const sharpened = make();
+  applyPresencePrepass(sharpened, { ...ZERO_SETTINGS, sharpening: 1 }, 1);
+  assert.ok(variance(sharpened.data) > base, "RL must add local contrast");
 });
 
 test("applyPresencePrepass: negative noise (denoise) smooths a noisy flat", () => {

@@ -67,6 +67,6 @@ export default defineConfig({
       },
     }),
   ],
-  server: { host: true, headers: isolationHeaders },
-  preview: { host: true, headers: isolationHeaders },
+  server: { host: true, allowedHosts: ["micro"], headers: isolationHeaders },
+  preview: { host: true, allowedHosts: ["micro"], headers: isolationHeaders },
 });

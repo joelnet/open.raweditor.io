@@ -19,13 +19,15 @@ import {
 
 /**
  * Tone settings, all pre-scaled: exposure in EV (±5), grade hues in turns
- * [0, 1), grade sats and blending in [0, 1], the rest in [-1, +1].
+ * [0, 1), grade sats and blending in [0, 1], the rest in [-1, +1]
+ * except positive-only sharpening/grain controls in [0, 1].
  * `masks` are local adjustments (linear/radial gradients); treat the array
  * as immutable — always replace it, never mutate in place.
  * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
  *             highlights: number, shadows: number, whites: number,
- *             blacks: number, texture: number, clarity: number,
- *             dehaze: number, vibrance: number, saturation: number,
+ *             blacks: number, sharpening: number, texture: number,
+ *             clarity: number, dehaze: number,
+ *             vibrance: number, saturation: number,
  *             hslRedHue: number, hslRedSat: number, hslRedLum: number,
  *             hslOrangeHue: number, hslOrangeSat: number,
  *             hslOrangeLum: number, hslYellowHue: number,
@@ -57,6 +59,7 @@ export const ZERO_SETTINGS = Object.freeze({
   shadows: 0,
   whites: 0,
   blacks: 0,
+  sharpening: 0,
   texture: 0,
   clarity: 0,
   dehaze: 0,

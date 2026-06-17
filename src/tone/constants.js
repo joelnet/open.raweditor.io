@@ -80,13 +80,15 @@ export const GRADE = {
 };
 
 /**
- * Presence (texture / clarity / dehaze): the spatial adjustments. The
- * algorithms follow the open-source consensus — texture is à trous (B3
- * spline) wavelet band amplification (darktable's contrast equalizer, ART's
- * texture boost), clarity is wide-radius local contrast with darktable's
- * local-laplacian midtone transfer `d·exp(-d²·k)` (the halo killer), and
- * dehaze is the dark channel prior (He et al. 2009) with a guided-filter
- * refined transmission map (darktable hazeremoval, RawTherapee ipdehaze).
+ * Presence (sharpening / texture / clarity / dehaze): the spatial
+ * adjustments. The algorithms follow the open-source consensus — sharpening
+ * is Richardson-Lucy deconvolution with a symmetric Gaussian PSF
+ * (RawTherapee/G'MIC), texture is à trous (B3 spline) wavelet band
+ * amplification (darktable's contrast equalizer, ART's texture boost),
+ * clarity is wide-radius local contrast with darktable's local-laplacian
+ * midtone transfer `d·exp(-d²·k)` (the halo killer), and dehaze is the dark
+ * channel prior (He et al. 2009) with a guided-filter refined transmission
+ * map (darktable hazeremoval, RawTherapee ipdehaze).
  * Texture/clarity work on gamma-encoded luminance and re-apply as a
  * ratio on linear RGB (vkdt-style, hue-preserving); dehaze works on
  * linear RGB where the haze model holds.
@@ -96,6 +98,14 @@ export const SPATIAL = {
   GAMMA: 2.4,
   /** Cap on the linear-light gain texture/clarity may apply (vkdt). */
   RATIO_MAX: 4,
+  /** Richardson-Lucy Gaussian PSF sigma in preview pixels. RT's default
+   *  deconvolution radius is 0.75; keep this slightly conservative. */
+  SHARPEN_RADIUS: 0.65,
+  /** G'MIC's GUI defaults to 10 iterations; enough bite without the cost and
+   *  halo risk of RT's heavier 30-iteration default. */
+  SHARPEN_ITERATIONS: 10,
+  /** Division floor for the RL correction term. */
+  SHARPEN_EPS: 1e-6,
   /** à trous levels: bands 0-2 drive texture, the level-6 residual is the
    *  clarity base (σ ≈ 37 px at preview scale ≈ RT's local contrast). */
   DETAIL_LEVELS: 6,

@@ -3,7 +3,7 @@
 // contrast → highlights/shadows → local masks → vibrance/saturation →
 // color grading → sRGB encode); constants are interpolated from
 // tone/constants.js so the GPU preview and the CPU export can never drift
-// apart. Presence (texture/clarity/dehaze) reads per-image aux textures
+// apart. Presence (sharpening/texture/clarity/dehaze) reads per-image aux textures
 // from spatial-worker.js and mirrors spatial.js, which the export applies
 // as a pre-pass instead. The red mask overlay is the one preview-only
 // extra (it never affects an export).
@@ -76,6 +76,7 @@ uniform float u_highlights;     // [-1, 1]
 uniform float u_shadows;        // [-1, 1]
 uniform float u_whites;         // [-1, 1]
 uniform float u_blacks;         // [-1, 1]
+uniform float u_sharpening;     // [0, 1]
 uniform float u_texture;        // [-1, 1]
 uniform float u_clarity;        // [-1, 1]
 uniform float u_dehaze;         // [-1, 1]
@@ -102,10 +103,12 @@ uniform float u_grainMidtones;  // [0, 1] — darktable midtones bias (×100)
 uniform float u_noise;          // [-1, 1] — positive adds chromatic noise
 
 // Presence aux, computed per image by spatial-worker.js (slider moves stay
-// single-pass): à trous detail planes of the source gamma-luma and the
-// guided-filter-refined haze amount. u_hasAux gates until they're ready.
+// single-pass): à trous detail planes of the source gamma-luma, the
+// Richardson-Lucy linear-luma delta, and the guided-filter-refined haze
+// amount. u_hasAux gates until they're ready.
 uniform int u_hasAux;
 uniform sampler2D u_detail;     // c1, c2, c3, base (clarity residual)
+uniform sampler2D u_sharpenD;   // Richardson-Lucy linear-luma delta
 uniform sampler2D u_dehazeD;    // refined dark channel [0, 1]
 uniform vec3 u_airlight;
 
@@ -475,6 +478,11 @@ void main() {
       float t = max(1.0 - ${f(SPATIAL.DEHAZE_OMEGA)} * u_dehaze * D,
         ${f(SPATIAL.DEHAZE_T_MIN)});
       rgb = max((rgb - u_airlight) / t + u_airlight, 0.0);
+    }
+    if (u_sharpening > 0.0) {
+      float delta = texelFetch(u_sharpenD, p, 0).r;
+      float yNew = max(ySrc + u_sharpening * delta, 0.0);
+      rgb *= clamp(yNew / max(ySrc, 1e-5), 0.0, ${f(SPATIAL.RATIO_MAX)});
     }
     float nr = max(-u_noise, 0.0);
     if (u_texture != 0.0 || u_clarity != 0.0 || nr > 0.0) {

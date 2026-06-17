@@ -102,6 +102,16 @@ export const TONE_SLIDERS = /** @type {const} */ ([
 /** @type {readonly SliderDef[]} */
 export const PRESENCE_SLIDERS = /** @type {const} */ ([
   {
+    key: "sharpening",
+    label: "SHARPEN",
+    min: 0,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+    signed: false,
+  },
+  {
     key: "texture",
     label: "TEXTURE",
     min: -100,

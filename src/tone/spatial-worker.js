@@ -7,6 +7,7 @@
 import {
   lumaFromRgba16,
   computeDetailPlanes,
+  computeSharpenDeltaPlane,
   computeDehazeAux,
   computeDehazePlane,
   downsampleRgbFromRgba16,
@@ -27,6 +28,7 @@ ctx.onmessage = (/** @type {MessageEvent} */ e) => {
       detail[i * 4 + 2] = c3[i];
       detail[i * 4 + 3] = base[i];
     }
+    const sharpenD = computeSharpenDeltaPlane(luma, width, height);
     const aux = computeDehazeAux(
       downsampleRgbFromRgba16(pixels, width, height),
     );
@@ -34,9 +36,16 @@ ctx.onmessage = (/** @type {MessageEvent} */ e) => {
     ctx.postMessage(
       {
         type: "done",
-        aux: { detail, dehazeD, airlight: aux.airlight, width, height },
+        aux: {
+          detail,
+          sharpenD,
+          dehazeD,
+          airlight: aux.airlight,
+          width,
+          height,
+        },
       },
-      [detail.buffer, dehazeD.buffer],
+      [detail.buffer, sharpenD.buffer, dehazeD.buffer],
     );
   } catch (err) {
     ctx.postMessage({

@@ -24,6 +24,7 @@ const UNIFORMS = /** @type {const} */ ([
   "shadows",
   "whites",
   "blacks",
+  "sharpening",
   "texture",
   "clarity",
   "dehaze",
@@ -71,9 +72,9 @@ function compileShader(gl, type, source) {
 
 /**
  * Per-image presence aux from spatial-worker.js: interleaved à trous
- * detail planes (c1, c2, c3, clarity base), the refined haze amount, and
- * the estimated airlight color.
- * @typedef {{ detail: Float32Array, dehazeD: Float32Array,
+ * detail planes (c1, c2, c3, clarity base), the Richardson-Lucy sharpening
+ * delta, the refined haze amount, and the estimated airlight color.
+ * @typedef {{ detail: Float32Array, sharpenD: Float32Array, dehazeD: Float32Array,
  *             airlight: [number, number, number],
  *             width: number, height: number }} PresenceAux
  */
@@ -140,9 +141,10 @@ export function createRenderer(canvas) {
   const locHasAux = gl.getUniformLocation(program, "u_hasAux");
   const locAirlight = gl.getUniformLocation(program, "u_airlight");
   gl.uniform1i(gl.getUniformLocation(program, "u_image"), 0);
-  // unit 1 is the histogram readback target; presence aux lives on 2 and 3
+  // unit 1 is the histogram readback target; presence aux lives on 2, 3, 5
   gl.uniform1i(gl.getUniformLocation(program, "u_detail"), 2);
   gl.uniform1i(gl.getUniformLocation(program, "u_dehazeD"), 3);
+  gl.uniform1i(gl.getUniformLocation(program, "u_sharpenD"), 5);
   // brush-mask coverage array lives on unit 4
   gl.uniform1i(gl.getUniformLocation(program, "u_brushMask"), 4);
   gl.uniform1i(locHasAux, 0);
@@ -349,6 +351,7 @@ export function createRenderer(canvas) {
   // u_image). Bound once; texImage2D in setAux re-allocates per image.
   createNearestTexture(gl.TEXTURE2);
   createNearestTexture(gl.TEXTURE3);
+  createNearestTexture(gl.TEXTURE5);
   // Integer textures are non-filterable: NEAREST is mandatory.
   createNearestTexture(gl.TEXTURE0);
 
@@ -416,6 +419,18 @@ export function createRenderer(canvas) {
         gl.RGBA,
         gl.FLOAT,
         aux.detail,
+      );
+      gl.activeTexture(gl.TEXTURE5);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.R16F,
+        aux.width,
+        aux.height,
+        0,
+        gl.RED,
+        gl.FLOAT,
+        aux.sharpenD,
       );
       gl.activeTexture(gl.TEXTURE3);
       gl.texImage2D(

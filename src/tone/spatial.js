@@ -1,5 +1,5 @@
-// Spatial analysis + application for the presence sliders (texture,
-// clarity, dehaze). Unlike the per-pixel tone pipeline, these need
+// Spatial analysis + application for the presence sliders (sharpening,
+// texture, clarity, dehaze). Unlike the per-pixel tone pipeline, these need
 // neighborhood information — but every intermediate here depends only on
 // the source image, never on slider values, so the preview computes them
 // once per opened file (spatial-worker.js → renderer aux textures) and the
@@ -12,9 +12,10 @@
 // them in sync the same way tone-math.js and shaders.js are.
 //
 // Algorithms (see SPATIAL in constants.js for the provenance):
-//   texture  — à trous B3-spline wavelet band gains with a noise floor
-//   clarity  — base-band local contrast with d·exp(-k·d²) halo rolloff
-//   dehaze   — dark channel prior + guided-filter transmission refinement
+//   sharpening — Richardson-Lucy deconvolution with a Gaussian PSF
+//   texture    — à trous B3-spline wavelet band gains with a noise floor
+//   clarity    — base-band local contrast with d·exp(-k·d²) halo rolloff
+//   dehaze     — dark channel prior + guided-filter transmission refinement
 
 import { LUMA, SPATIAL, NR } from "./constants.js";
 import { decodeInput, encodeInput } from "./tone-math.js";
@@ -111,6 +112,95 @@ export function atrousPass(src, dst, tmp, w, h, step) {
         16;
     }
   }
+}
+
+// --- Gaussian Richardson-Lucy deconvolution -----------------------------
+
+/** @param {number} sigma */
+function gaussianKernel(sigma) {
+  const s = Math.max(sigma, 0.01);
+  const radius = Math.max(1, Math.ceil(s * 3));
+  const kernel = new Float32Array(radius * 2 + 1);
+  let sum = 0;
+  for (let i = -radius; i <= radius; i++) {
+    const v = Math.exp(-(i * i) / (2 * s * s));
+    kernel[i + radius] = v;
+    sum += v;
+  }
+  for (let i = 0; i < kernel.length; i++) kernel[i] /= sum;
+  return { kernel, radius };
+}
+
+/**
+ * Separable Gaussian blur with clamp-to-edge borders.
+ * @param {Float32Array} src
+ * @param {Float32Array} dst
+ * @param {Float32Array} tmp
+ * @param {number} w @param {number} h
+ * @param {{ kernel: Float32Array, radius: number }} g
+ */
+export function gaussianBlur(src, dst, tmp, w, h, g) {
+  const { kernel, radius } = g;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let k = -radius; k <= radius; k++) {
+        const xx = Math.min(Math.max(x + k, 0), w - 1);
+        sum += src[row + xx] * kernel[k + radius];
+      }
+      tmp[row + x] = sum;
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let k = -radius; k <= radius; k++) {
+        const yy = Math.min(Math.max(y + k, 0), h - 1);
+        sum += tmp[yy * w + x] * kernel[k + radius];
+      }
+      dst[row + x] = sum;
+    }
+  }
+}
+
+/**
+ * Slider-independent Richardson-Lucy sharpening plane on linear luminance.
+ * Uses the classic update also used by G'MIC:
+ *   estimate *= H( observed / max(H(estimate), eps) )
+ * where H is a symmetric Gaussian point-spread function.
+ * @param {Float32Array} luma linear-light luma plane
+ * @param {number} w @param {number} h
+ * @param {number} [scale] full-res / preview scale
+ * @returns {Float32Array} linear-luma delta: deconvolved - source
+ */
+export function computeSharpenDeltaPlane(luma, w, h, scale = 1) {
+  const n = w * h;
+  const estimate = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    estimate[i] = Math.max(luma[i], 0);
+  }
+  const blurred = new Float32Array(n);
+  const ratio = new Float32Array(n);
+  const correction = new Float32Array(n);
+  const tmp = new Float32Array(n);
+  const g = gaussianKernel(SPATIAL.SHARPEN_RADIUS * Math.max(scale, 1));
+  for (let iter = 0; iter < SPATIAL.SHARPEN_ITERATIONS; iter++) {
+    gaussianBlur(estimate, blurred, tmp, w, h, g);
+    for (let i = 0; i < n; i++) {
+      ratio[i] =
+        Math.max(luma[i], 0) / Math.max(blurred[i], SPATIAL.SHARPEN_EPS);
+    }
+    gaussianBlur(ratio, correction, tmp, w, h, g);
+    for (let i = 0; i < n; i++) {
+      estimate[i] = Math.max(estimate[i] * correction[i], 0);
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    estimate[i] -= Math.max(luma[i], 0);
+  }
+  return estimate;
 }
 
 /**
@@ -218,6 +308,19 @@ export function presenceRatio(yLin, delta) {
     Math.pow(yNew, SPATIAL.GAMMA) / Math.max(yLin, 1e-5),
     SPATIAL.RATIO_MAX,
   );
+}
+
+/**
+ * Linear-light gain that blends a precomputed Richardson-Lucy luma delta.
+ * `amount` is the UI blend factor, matching RawTherapee's Amount semantics.
+ * @param {number} yLin linear source luma
+ * @param {number} delta linear-luma deconvolution delta
+ * @param {number} amount sharpening amount [0, 1]
+ */
+export function sharpenRatio(yLin, delta, amount) {
+  if (amount <= 0 || delta === 0) return 1;
+  const yNew = Math.max(yLin + amount * delta, 0);
+  return Math.min(yNew / Math.max(yLin, 1e-5), SPATIAL.RATIO_MAX);
 }
 
 /**
@@ -587,13 +690,22 @@ export function computeDehazePlane(aux, luma, w, h) {
  * @param {number} [scale] integer ≥ 1
  */
 export function applyPresencePrepass(image, settings, scale = 1) {
+  const sharpening = settings.sharpening ?? 0;
   const texture = settings.texture ?? 0;
   const clarity = settings.clarity ?? 0;
   const dehaze = settings.dehaze ?? 0;
   // Negative NOISE slider = wavelet-shrinkage denoise on the finest band
   // (positive NOISE is chromatic noise added in the display post-step).
   const nr = Math.max(-(settings.noise ?? 0), 0);
-  if (texture === 0 && clarity === 0 && dehaze === 0 && nr === 0) return;
+  if (
+    sharpening === 0 &&
+    texture === 0 &&
+    clarity === 0 &&
+    dehaze === 0 &&
+    nr === 0
+  ) {
+    return;
+  }
 
   const { data, width, height, colors, bits } = image;
   const maxVal = bits === 16 ? 65535 : 255;
@@ -603,6 +715,10 @@ export function applyPresencePrepass(image, settings, scale = 1) {
   const delta =
     texture !== 0 || clarity !== 0 || nr > 0
       ? computeDeltaPlane(luma, width, height, scale, texture, clarity, nr)
+      : null;
+  const sharpenDelta =
+    sharpening !== 0
+      ? computeSharpenDeltaPlane(luma, width, height, scale)
       : null;
 
   for (let y = 0; y < height; y++) {
@@ -623,6 +739,12 @@ export function applyPresencePrepass(image, settings, scale = 1) {
       }
       if (delta) {
         const ratio = presenceRatio(luma[i], delta[i]);
+        r *= ratio;
+        g *= ratio;
+        b *= ratio;
+      }
+      if (sharpenDelta) {
+        const ratio = sharpenRatio(luma[i], sharpenDelta[i], sharpening);
         r *= ratio;
         g *= ratio;
         b *= ratio;
