@@ -101,17 +101,24 @@ uniform float u_invert;         // 0 or 1 (photo negative)
 uniform float u_grainAmount;    // [-1, 1] (only the magnitude matters)
 uniform float u_grainSize;      // [-1, 1] (coarseness)
 uniform float u_grainMidtones;  // [0, 1] — darktable midtones bias (×100)
-uniform float u_noise;          // [-1, 1] — positive adds chromatic noise
+uniform float u_noise;          // [0, 1] — adds chromatic noise
+
+// NOISE REDUCTION (presence prepass, step 0)
+uniform float u_lumaNoise;      // [0, 1] — multi-band luminance NR amount
+uniform float u_colorNoise;     // [0, 1] — chroma (color) NR amount
+uniform float u_noiseDetail;    // [0, 1] — luminance detail preservation
 
 // Spatial aux, computed per image by spatial-worker.js (slider moves stay
 // single-pass): à trous detail planes of the source gamma-luma, the
 // Richardson-Lucy linear-luma delta, the guided-filter-refined haze amount,
-// and Light Balance's guided tonal weight. u_hasAux gates until ready.
+// Light Balance's guided tonal weight, and the luma-guided denoised chroma.
+// u_hasAux gates until ready.
 uniform int u_hasAux;
 uniform sampler2D u_detail;     // c1, c2, c3, base (clarity residual)
 uniform sampler2D u_sharpenD;   // Richardson-Lucy linear-luma delta
 uniform sampler2D u_dehazeD;    // refined dark channel [0, 1]
 uniform sampler2D u_lightBalanceW; // guided tonal weight [0.25, 1]
+uniform sampler2D u_chromaD;    // denoised chroma Co', Cg' (YCoCg)
 uniform vec3 u_airlight;
 
 // Geometry: orientation (quarter-turns CW) + straighten rotation. v_uv is
@@ -342,14 +349,41 @@ float textureDelta(float d, float w, float tau, float s) {
   return (max(1.0 + s * w, ${f(SPATIAL.TEXTURE_MIN_GAIN)}) - 1.0) * d;
 }
 
-// Finest-band soft-threshold coring for denoise — mirrors nrDelta() in
-// spatial.js. Returns shrink(d1) − d1 scaled by amount (the magnitude of a
-// negative NOISE slider); flats below the floor smooth, edges survive.
-float nrDelta(float d1, float amount) {
+// Soft-threshold (coring): |d| ≤ τ → 0, else sign(d)·(|d| − τ).
+float nrSoft(float d, float tau) {
+  float a = abs(d);
+  return a <= tau ? 0.0 : sign(d) * (a - tau);
+}
+
+// Multi-band luminance NR — mirrors lumaNrDelta() in spatial.js. Cores the
+// finest three à trous bands by per-band floors lowered by the Detail
+// slider; returns Σ(shrink(d_b) − d_b) scaled by amount, so flats below the
+// floors smooth while edges survive.
+float lumaNrDelta(float y0, float c1, float c2, float c3,
+                  float amount, float detail) {
   if (amount <= 0.0) return 0.0;
-  float a = abs(d1);
-  float shrunk = a <= ${f(NR.THRESH)} ? 0.0 : sign(d1) * (a - ${f(NR.THRESH)});
-  return amount * (shrunk - d1);
+  float k = 1.0 - detail * ${f(NR.DETAIL_STRENGTH)};
+  float d0 = y0 - c1, d1 = c1 - c2, d2 = c2 - c3;
+  return amount * (
+    (nrSoft(d0, ${f(NR.LUMA_THRESH[0])} * k) - d0)
+    + (nrSoft(d1, ${f(NR.LUMA_THRESH[1])} * k) - d1)
+    + (nrSoft(d2, ${f(NR.LUMA_THRESH[2])} * k) - d2));
+}
+
+// Chroma (color) NR — mirrors colorNrBlend() in spatial.js. Blends the
+// denoised chroma (Co', Cg') into the source by amount in YCoCg, leaving the
+// luminance Y untouched (kills color blotches without touching tone).
+vec3 colorNrBlend(vec3 rgb, vec2 cd, float amount) {
+  float Co = rgb.r - rgb.b;
+  float t = rgb.b + Co * 0.5;
+  float Cg = rgb.g - t;
+  float Y = t + Cg * 0.5;
+  Co = mix(Co, cd.x, amount);
+  Cg = mix(Cg, cd.y, amount);
+  float t2 = Y - Cg * 0.5;
+  float G = Cg + t2;
+  float B = t2 - Co * 0.5;
+  return vec3(B + Co, G, B);
 }
 
 // Mask weight at one pixel — mirrors maskWeight() in mask-math.js.
@@ -514,11 +548,17 @@ void main() {
   ivec2 p = clamp(ivec2(suv * vec2(ts)), ivec2(0), ts - 1);
   vec3 rgb = decodeInput(vec3(texelFetch(u_image, p, 0).rgb) / 65535.0);
 
-  // 0. presence: dehaze (linear RGB, where the haze model holds), then
-  // texture/clarity (gamma-luma delta applied as a hue-preserving linear
-  // ratio) — mirrors applyPresencePrepass() in spatial.js: same formulas,
-  // same position (source-referred, before white balance).
+  // 0. presence: color NR (chroma blend), then dehaze (linear RGB, where the
+  // haze model holds), then sharpen and the luma NR/texture/clarity gamma-luma
+  // delta applied as a hue-preserving linear ratio — mirrors
+  // applyPresencePrepass() in spatial.js: same formulas, same position
+  // (source-referred, before white balance).
   if (u_hasAux == 1) {
+    // color NR first: blend denoised chroma in (luminance preserved)
+    if (u_colorNoise > 0.0) {
+      vec2 cd = texelFetch(u_chromaD, p, 0).rg;
+      rgb = colorNrBlend(rgb, cd, u_colorNoise);
+    }
     float ySrc = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
     if (u_dehaze != 0.0) {
       float D = texelFetch(u_dehazeD, p, 0).r;
@@ -531,13 +571,13 @@ void main() {
       float yNew = max(ySrc + u_sharpening * delta, 0.0);
       rgb *= clamp(yNew / max(ySrc, 1e-5), 0.0, ${f(SPATIAL.RATIO_MAX)});
     }
-    float nr = max(-u_noise, 0.0);
-    if (u_texture != 0.0 || u_clarity != 0.0 || nr > 0.0) {
+    if (u_texture != 0.0 || u_clarity != 0.0 || u_lumaNoise > 0.0) {
       float y0 = pow(max(ySrc, 0.0), 1.0 / ${f(SPATIAL.GAMMA)});
       vec4 c = texelFetch(u_detail, p, 0);
       float delta = 0.0;
-      // denoise: soft-threshold the finest band (y0 − c1) only
-      if (nr > 0.0) delta += nrDelta(y0 - c.x, nr);
+      // luminance NR: soft-threshold (core) the finest three bands
+      if (u_lumaNoise > 0.0)
+        delta += lumaNrDelta(y0, c.x, c.y, c.z, u_lumaNoise, u_noiseDetail);
       if (u_texture != 0.0) {
         delta += textureDelta(y0 - c.x,
           ${f(SPATIAL.TEXTURE_WEIGHTS[0])}, ${f(SPATIAL.TEXTURE_THRESH[0])}, u_texture);

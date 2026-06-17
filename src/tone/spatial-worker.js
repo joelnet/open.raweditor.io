@@ -9,6 +9,7 @@ import {
   computeDetailPlanes,
   computeSharpenDeltaPlane,
   computeLightBalanceWeightPlane,
+  computeChromaDenoiseFromRgba16,
   computeDehazeAux,
   computeDehazePlane,
   downsampleRgbFromRgba16,
@@ -31,6 +32,7 @@ ctx.onmessage = (/** @type {MessageEvent} */ e) => {
     }
     const sharpenD = computeSharpenDeltaPlane(luma, width, height);
     const lightBalanceW = computeLightBalanceWeightPlane(luma, width, height);
+    const chroma = computeChromaDenoiseFromRgba16(pixels, luma, width, height);
     const aux = computeDehazeAux(
       downsampleRgbFromRgba16(pixels, width, height),
     );
@@ -43,12 +45,19 @@ ctx.onmessage = (/** @type {MessageEvent} */ e) => {
           sharpenD,
           dehazeD,
           lightBalanceW,
+          chroma,
           airlight: aux.airlight,
           width,
           height,
         },
       },
-      [detail.buffer, sharpenD.buffer, dehazeD.buffer, lightBalanceW.buffer],
+      [
+        detail.buffer,
+        sharpenD.buffer,
+        dehazeD.buffer,
+        lightBalanceW.buffer,
+        chroma.buffer,
+      ],
     );
   } catch (err) {
     ctx.postMessage({

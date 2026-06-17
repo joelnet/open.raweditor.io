@@ -10,7 +10,7 @@ import {
   computeDeltaPlane,
   textureDelta,
   clarityDelta,
-  nrDelta,
+  lumaNrDelta,
   presenceRatio,
   sharpenRatio,
   lightBalanceGain,
@@ -102,24 +102,38 @@ test("clarityDelta: rolloff starves large edges of gain", () => {
   assert.ok(Math.abs(large) < Math.abs(small)); // halo killer
 });
 
-test("nrDelta: zero amount is identity, soft-threshold cores small detail", () => {
-  assert.equal(nrDelta(0.5, 0), 0); // no NR
-  // detail below the noise floor is fully removed (added delta = -d1)
-  const small = NR.THRESH * 0.4;
-  assert.ok(Math.abs(nrDelta(small, 1) + small) < EPS, "flats smoothed");
-  assert.ok(Math.abs(nrDelta(-small, 1) - small) < EPS);
-  // a large edge keeps most of its amplitude: shrink is d - THRESH, so the
-  // delta only subtracts the floor, never flips the sign
+test("lumaNrDelta: zero amount is identity, soft-threshold cores small detail", () => {
+  const c = 0.4; // flat coarser bands (c1=c2=c3) contribute nothing
+  const t0 = NR.LUMA_THRESH[0]; // detail 0 → floors at full strength
+  assert.equal(lumaNrDelta(0.5, c, c, c, 0, 0), 0); // no NR
+
+  // a finest-band detail below the floor is fully removed (delta = −d0)
+  const small = t0 * 0.4;
+  assert.ok(
+    Math.abs(lumaNrDelta(c + small, c, c, c, 1, 0) + small) < EPS,
+    "flats smoothed",
+  );
+  assert.ok(Math.abs(lumaNrDelta(c - small, c, c, c, 1, 0) - small) < EPS);
+
+  // a large finest-band edge keeps its amplitude minus the floor
   const edge = 0.4;
-  const cored = edge + nrDelta(edge, 1); // = shrunk value
-  assert.ok(Math.abs(cored - (edge - NR.THRESH)) < EPS, "edge survives");
+  const cored = edge + lumaNrDelta(c + edge, c, c, c, 1, 0); // shrunk value
+  assert.ok(Math.abs(cored - (edge - t0)) < EPS, "edge survives");
   assert.ok(cored > 0, "edge keeps its sign");
 });
 
-test("nrDelta: amount interpolates between original and fully cored", () => {
-  const d = NR.THRESH * 0.5; // below the floor → fully cored is 0
-  assert.ok(Math.abs(nrDelta(d, 1) + d) < EPS); // amount 1 → removes it all
-  assert.ok(Math.abs(nrDelta(d, 0.5) + d * 0.5) < EPS); // halfway
+test("lumaNrDelta: amount interpolates, Detail lowers the floor", () => {
+  const c = 0.4;
+  const t0 = NR.LUMA_THRESH[0];
+  const d = t0 * 0.5; // below the floor at detail 0 → fully cored
+  assert.ok(Math.abs(lumaNrDelta(c + d, c, c, c, 1, 0) + d) < EPS); // removes all
+  assert.ok(Math.abs(lumaNrDelta(c + d, c, c, c, 0.5, 0) + d * 0.5) < EPS); // half
+
+  // max Detail lowers the floor so the same detail now clears it and survives
+  const tHi = t0 * (1 - NR.DETAIL_STRENGTH);
+  assert.ok(d > tHi, "detail now above the lowered floor");
+  const survived = d + lumaNrDelta(c + d, c, c, c, 1, 1);
+  assert.ok(Math.abs(survived - (d - tHi)) < EPS, "high Detail preserves it");
 });
 
 test("presenceRatio: identity at zero delta, capped at RATIO_MAX", () => {
@@ -335,7 +349,7 @@ test("applyPresencePrepass: sharpening increases local contrast", () => {
   assert.ok(variance(sharpened.data) > base, "RL must add local contrast");
 });
 
-test("applyPresencePrepass: negative noise (denoise) smooths a noisy flat", () => {
+test("applyPresencePrepass: luminance NR smooths a noisy flat", () => {
   /** local high-frequency variance: mean squared finest-band detail */
   function fineVar(/** @type {Uint16Array} */ data, w, h) {
     let s = 0;
@@ -355,22 +369,80 @@ test("applyPresencePrepass: negative noise (denoise) smooths a noisy flat", () =
     grayImage(48, 32, (x, y) => 0.45 + 0.03 * (rand(y * 48 + x) - 0.5) * 2);
   const before = fineVar(make().data, 48, 32);
   const img = make();
-  applyPresencePrepass(img, { ...ZERO_SETTINGS, noise: -1 }, 1);
+  // detail 0 → floors at full strength (most aggressive coring)
+  applyPresencePrepass(
+    img,
+    { ...ZERO_SETTINGS, lumaNoise: 1, noiseDetail: 0 },
+    1,
+  );
   const after = fineVar(img.data, 48, 32);
   assert.ok(
     after < before,
-    `denoise must reduce fine variance (${before}->${after})`,
+    `luminance NR must reduce fine variance (${before}->${after})`,
   );
 });
 
-test("applyPresencePrepass: negative noise preserves an edge", () => {
+test("applyPresencePrepass: luminance NR preserves an edge", () => {
   // a hard vertical edge: denoise must not flatten it (coring keeps edges)
   const img = grayImage(32, 24, (x) => (x < 16 ? 0.2 : 0.8));
-  applyPresencePrepass(img, { ...ZERO_SETTINGS, noise: -1 }, 1);
+  applyPresencePrepass(
+    img,
+    { ...ZERO_SETTINGS, lumaNoise: 1, noiseDetail: 0 },
+    1,
+  );
   const mid = 12 * 32;
   const lo = img.data[(mid + 4) * 3] / 65535;
   const hi = img.data[(mid + 27) * 3] / 65535;
   assert.ok(hi - lo > 0.45, `edge contrast must survive (${lo} vs ${hi})`);
+});
+
+test("applyPresencePrepass: color NR smooths chroma, leaves a flat luma alone", () => {
+  // A flat mid-gray Y with random chroma blotches (Co = R − B noise, Cg = 0).
+  // YCoCg with Cg = 0: R = Y + Co/2, G = Y, B = Y − Co/2.
+  const w = 48;
+  const h = 32;
+  const Y = 0.45;
+  const make = () => {
+    const data = new Uint16Array(w * h * 3);
+    for (let i = 0; i < w * h; i++) {
+      const co = 0.08 * (rand(i) - 0.5) * 2; // ±0.08 chroma noise
+      const r = Y + co / 2;
+      const b = Y - co / 2;
+      data[i * 3] = Math.round(Math.min(Math.max(r, 0), 1) * 65535);
+      data[i * 3 + 1] = Math.round(Y * 65535);
+      data[i * 3 + 2] = Math.round(Math.min(Math.max(b, 0), 1) * 65535);
+    }
+    return { data, width: w, height: h, colors: 3, bits: 16 };
+  };
+  /** variance of the chroma channel R − B */
+  const chromaVar = (/** @type {Uint16Array} */ d) => {
+    let s = 0;
+    let s2 = 0;
+    const n = w * h;
+    for (let i = 0; i < n; i++) {
+      const c = d[i * 3] - d[i * 3 + 2];
+      s += c;
+      s2 += c * c;
+    }
+    return s2 / n - (s / n) ** 2;
+  };
+  const before = chromaVar(make().data);
+  const img = make();
+  applyPresencePrepass(img, { ...ZERO_SETTINGS, colorNoise: 1 }, 1);
+  const after = chromaVar(img.data);
+  assert.ok(
+    after < before * 0.6,
+    `chroma variance must drop (${before}->${after})`,
+  );
+  // the green channel (≈ luminance here) must stay flat — color NR is chroma-only
+  let gMin = Infinity;
+  let gMax = -Infinity;
+  for (let i = 0; i < w * h; i++) {
+    const g = img.data[i * 3 + 1];
+    if (g < gMin) gMin = g;
+    if (g > gMax) gMax = g;
+  }
+  assert.ok((gMax - gMin) / 65535 < 0.02, "luma stays flat under color NR");
 });
 
 test("applyPresencePrepass: dehaze recovers dark objects under synthetic haze", () => {

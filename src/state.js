@@ -149,6 +149,47 @@ export const PRESENCE_SLIDERS = /** @type {const} */ ([
   },
 ]);
 
+/**
+ * NOISE REDUCTION section: separate LUMINANCE (multi-band wavelet shrinkage)
+ * and COLOR (luma-guided chroma denoise) amounts, plus a DETAIL slider that
+ * controls how much fine luma texture survives the luminance pass — the
+ * Lightroom/RawTherapee layout. See NR in tone/constants.js.
+ * @type {readonly SliderDef[]}
+ */
+export const NR_SLIDERS = /** @type {const} */ ([
+  {
+    key: "lumaNoise",
+    label: "LUMINANCE",
+    min: 0,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+    signed: false,
+  },
+  {
+    key: "colorNoise",
+    label: "COLOR",
+    min: 0,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+    signed: false,
+  },
+  {
+    key: "noiseDetail",
+    label: "DETAIL",
+    min: 0,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+    reset: 50,
+    signed: false,
+  },
+]);
+
 /** @type {readonly SliderDef[]} */
 export const COLOR_SLIDERS = /** @type {const} */ ([
   {
@@ -223,8 +264,8 @@ export const HSL_KEYS = /** @type {readonly SliderKey[]} */ (
 /**
  * EFFECTS section sliders: film GRAIN (Amount / Size / Midtones — a port of
  * darktable's grain module: strength / coarseness / midtones-bias) and the
- * bipolar NOISE slider (+ add chromatic noise / − wavelet denoise). The
- * NEGATIVE toggle
+ * positive-only NOISE slider (adds chromatic noise; noise *reduction* is its
+ * own NOISE REDUCTION section, see NR_SLIDERS). The NEGATIVE toggle
  * (photo-negative invert) is a bespoke button, not a slider — see
  * EFFECTS_TOGGLE_KEY and buildEffects() in ui/effects.js.
  * @type {readonly SliderDef[]}
@@ -263,11 +304,12 @@ export const EFFECTS_SLIDERS = /** @type {const} */ ([
   {
     key: "noise",
     label: "NOISE",
-    min: -100,
+    min: 0,
     max: 100,
     step: 1,
     scale: 0.01,
     decimals: 0,
+    signed: false,
   },
 ]);
 
@@ -350,6 +392,7 @@ export const SECTIONS = [
   { title: "WHITE BALANCE", sliders: WB_SLIDERS, auto: true },
   { title: "TONE", sliders: TONE_SLIDERS, auto: true },
   { title: "PRESENCE", sliders: PRESENCE_SLIDERS, auto: false },
+  { title: "NOISE REDUCTION", sliders: NR_SLIDERS, auto: false },
   { title: "COLOR", sliders: COLOR_SLIDERS, auto: false },
   { title: "COLOR MIXER", sliders: [], auto: false, mixer: true },
   {

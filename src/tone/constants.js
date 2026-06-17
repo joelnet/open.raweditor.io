@@ -217,12 +217,12 @@ export const INPUT_TRANSFER = "linear";
  *     min(w,h), exactly darktable's wx/wd) so a downscaled preview and a
  *     full-res export show the same grain field — no time, no RNG.
  *
- *   noise (positive half of the bipolar slider) — fine CHROMATIC digital
+ *   noise (positive-only slider) — fine CHROMATIC digital
  *     noise (independent per channel, ~1 cell), the additive side of the
  *     RawTherapee/GIMP "add noise" operators, kept distinct from the mono
- *     grain (this stays value noise — real sensor noise is per-pixel). The
- *     negative half is wavelet-shrinkage denoise and lives in the presence
- *     prepass (see SPATIAL.NR_*), not here.
+ *     grain (this stays value noise — real sensor noise is per-pixel).
+ *     Noise *reduction* is its own NOISE REDUCTION section (see NR below),
+ *     applied in the presence prepass, not here.
  */
 export const EFFECTS = {
   // --- film grain: darktable grain.c, verbatim constants ---
@@ -287,20 +287,42 @@ export const EFFECTS = {
 };
 
 /**
- * Noise reduction (negative half of the bipolar NOISE slider): edge-
- * preserving soft-threshold (coring) of the finest à trous detail band in
- * the presence prepass, reusing the detail planes spatial.js already
- * computes. Below the noise floor the finest-band detail is shrunk toward
- * zero so flat areas smooth out while edges (large coefficients) survive —
- * the wavelet-shrinkage recipe behind darktable's denoise and RawTherapee's
- * wavelet NR. Distinct from negative Texture, which attenuates whole bands
- * broadband; NR cores only the finest band.
+ * Noise reduction: a dedicated NOISE REDUCTION section with separate
+ * LUMINANCE / COLOR / DETAIL controls (the Lightroom/RawTherapee layout).
+ *
+ *   luminance — multi-band wavelet shrinkage: edge-preserving soft-threshold
+ *     (coring) of the finest three à trous detail bands in the presence
+ *     prepass, reusing the detail planes spatial.js already computes. Below
+ *     each band's noise floor the detail is shrunk toward zero so flats
+ *     smooth out while edges (large coefficients) survive — the
+ *     wavelet-shrinkage recipe behind darktable's denoise and RawTherapee's
+ *     wavelet NR, now across bands 0-2 (was the finest band only). Distinct
+ *     from negative Texture, which attenuates whole bands broadband.
+ *   detail — scales the per-band floors down (higher detail = lower floors =
+ *     more fine texture survives the luminance shrinkage).
+ *   color — edge-aware chroma denoise: the chroma (Co, Cg in YCoCg) is
+ *     smoothed by a luma-guided filter once per image, then blended with the
+ *     source chroma by the slider amount; luminance is left untouched. This
+ *     is what removes high-ISO color blotches (RawTherapee/darktable chroma
+ *     NR), the half the old finest-band luma coring never addressed.
  */
 export const NR = {
-  /** NOISE −1 soft-threshold on the finest-band detail (gamma-luma units).
-   *  Coefficients below this collapse toward zero; above it they keep their
-   *  amplitude minus the floor (classic soft threshold). */
-  THRESH: 0.05,
+  /** Per-band soft-threshold floors for luminance NR (gamma-luma units),
+   *  finest band first. Coefficients below the floor collapse toward zero;
+   *  above it they keep their amplitude minus the floor (classic soft
+   *  threshold). Coarser bands carry less noise energy, so the floor drops
+   *  ≈ ½ per level. */
+  LUMA_THRESH: [0.05, 0.025, 0.012],
+  /** How much DETAIL = 1 lowers the luminance floors (floor ×= 1 − detail·k).
+   *  < 1 so even max detail keeps a little coring on the finest band. */
+  DETAIL_STRENGTH: 0.8,
+  /** Chroma guided-filter radius as a fraction of the image long edge — wide
+   *  enough to erase low-frequency color blotches (the dominant chroma
+   *  noise). */
+  CHROMA_GF_RADIUS_FRAC: 0.01,
+  /** Chroma guided-filter edge epsilon (on the YCoCg chroma scale): smaller
+   *  preserves more color edges, larger smooths harder. */
+  CHROMA_GF_EPS: 1e-3,
 };
 
 /** Rec.709 luma weights used for the shadows/highlights masks. */

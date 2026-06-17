@@ -46,6 +46,7 @@ import {
  *             gradeBalance: number,
  *             invert: number, grainAmount: number, grainSize: number,
  *             grainMidtones: number, noise: number,
+ *             lumaNoise: number, colorNoise: number, noiseDetail: number,
  *             masks: readonly import("./mask-math.js").Mask[]
  *           }} ToneSettings
  */
@@ -111,6 +112,12 @@ export const ZERO_SETTINGS = Object.freeze({
   // when Amount > 0, so this stays an identity setting
   grainMidtones: 1,
   noise: 0,
+  // NOISE REDUCTION: off by default. noiseDetail sits at 0.5 (UI 50, the
+  // Lightroom default) but only matters when lumaNoise > 0, so this stays an
+  // identity setting.
+  lumaNoise: 0,
+  colorNoise: 0,
+  noiseDetail: 0.5,
   masks: Object.freeze([]),
 });
 

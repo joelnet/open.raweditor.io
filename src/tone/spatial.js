@@ -254,27 +254,178 @@ export function textureDelta(d, band, s) {
   return (Math.max(1 + s * w, SPATIAL.TEXTURE_MIN_GAIN) - 1) * d;
 }
 
+/** Soft-threshold (coring): |d| ≤ τ → 0, else sign(d)·(|d| − τ).
+ * @param {number} d @param {number} tau */
+function softThreshold(d, tau) {
+  const a = Math.abs(d);
+  return a <= tau ? 0 : Math.sign(d) * (a - tau);
+}
+
+/** Per-band luminance NR floor, lowered by the Detail slider so higher Detail
+ * keeps more fine texture. @param {number} band 0 = finest
+ * @param {number} detail [0, 1] */
+function nrBandFloor(band, detail) {
+  return NR.LUMA_THRESH[band] * (1 - detail * NR.DETAIL_STRENGTH);
+}
+
 /**
- * Noise-reduction delta for the FINEST à trous band (negative NOISE
- * slider): edge-preserving soft-threshold (coring). Detail coefficients
- * below the noise floor are pulled toward zero (smoothing flats), while
- * larger ones — edges — keep their amplitude minus the floor, so structure
- * survives. The returned value is what to ADD to the gamma-luma so that the
- * finest band is replaced by its shrunk version: shrink(d1) − d1, scaled by
- * the slider magnitude. This is the wavelet-shrinkage recipe behind
- * darktable denoise / RawTherapee wavelet NR, applied to only the finest
- * band (distinct from negative Texture's whole-band attenuation).
- * @param {number} d1 finest-band detail y0 − c1 (gamma units)
- * @param {number} amount NR strength [0, 1] (|negative slider|)
+ * Multi-band luminance noise-reduction delta (LUMINANCE slider): edge-
+ * preserving soft-threshold (coring) of the finest three à trous detail
+ * bands. Below each band's noise floor the detail is pulled toward zero
+ * (smoothing flats), while larger coefficients — edges — keep their
+ * amplitude minus the floor, so structure survives. The returned value is
+ * what to ADD to the gamma-luma so the bands are replaced by their shrunk
+ * versions: Σ (shrink(d_b) − d_b), scaled by the slider amount. This is the
+ * wavelet-shrinkage recipe behind darktable denoise / RawTherapee wavelet
+ * NR, now across bands 0-2 (distinct from negative Texture's whole-band
+ * attenuation).
+ * @param {number} y0 gamma-luma @param {number} c1 @param {number} c2
+ * @param {number} c3 à trous levels 1-3
+ * @param {number} amount LUMINANCE NR strength [0, 1]
+ * @param {number} detail DETAIL slider [0, 1]
  */
-export function nrDelta(d1, amount) {
+export function lumaNrDelta(y0, c1, c2, c3, amount, detail) {
   if (amount <= 0) return 0;
-  const tau = NR.THRESH;
-  const a = Math.abs(d1);
-  // soft threshold: |d| ≤ τ → 0, else sign(d)·(|d| − τ)
-  const shrunk = a <= tau ? 0 : Math.sign(d1) * (a - tau);
-  // amount interpolates between the original band (0) and the cored band (1)
-  return amount * (shrunk - d1);
+  const d0 = y0 - c1;
+  const d1 = c1 - c2;
+  const d2 = c2 - c3;
+  return (
+    amount *
+    (softThreshold(d0, nrBandFloor(0, detail)) -
+      d0 +
+      (softThreshold(d1, nrBandFloor(1, detail)) - d1) +
+      (softThreshold(d2, nrBandFloor(2, detail)) - d2))
+  );
+}
+
+// --- chroma (color) noise reduction -------------------------------------
+
+/**
+ * Edge-aware guided filter (He et al. 2013): smooths `src` while preserving
+ * the edges of `guide`, the box-window self/cross statistics → (a, b) → mean
+ * → a·guide + b. The same recipe inlined in computeDehazeAux and
+ * computeLightBalanceWeightPlane; shared here for the chroma denoise.
+ * @param {Float32Array} guide @param {Float32Array} src
+ * @param {number} w @param {number} h @param {number} radius
+ * @param {number} eps
+ * @returns {Float32Array} filtered output, same length
+ */
+export function guidedFilter(guide, src, w, h, radius, eps) {
+  const n = w * h;
+  const tmp = new Float32Array(n);
+  const meanI = new Float32Array(n);
+  const meanP = new Float32Array(n);
+  const corrII = new Float32Array(n);
+  const corrIP = new Float32Array(n);
+  boxBlur(guide, meanI, tmp, w, h, radius);
+  boxBlur(src, meanP, tmp, w, h, radius);
+  for (let i = 0; i < n; i++) corrII[i] = guide[i] * guide[i];
+  boxBlur(corrII, corrII, tmp, w, h, radius);
+  for (let i = 0; i < n; i++) corrIP[i] = guide[i] * src[i];
+  boxBlur(corrIP, corrIP, tmp, w, h, radius);
+  const a = new Float32Array(n);
+  const b = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const varI = corrII[i] - meanI[i] * meanI[i];
+    const covIP = corrIP[i] - meanI[i] * meanP[i];
+    a[i] = covIP / (varI + eps);
+    b[i] = meanP[i] - a[i] * meanI[i];
+  }
+  const meanA = new Float32Array(n);
+  const meanB = new Float32Array(n);
+  boxBlur(a, meanA, tmp, w, h, radius);
+  boxBlur(b, meanB, tmp, w, h, radius);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = meanA[i] * guide[i] + meanB[i];
+  return out;
+}
+
+/**
+ * Slider-independent denoised chroma plane for the COLOR slider. Decomposes
+ * linear RGB into YCoCg, then luma-guided-filters the Co/Cg chroma channels
+ * so low-frequency color blotches (the dominant high-ISO chroma noise) wash
+ * out while luminance edges are preserved. The shader/prepass blend this
+ * denoised chroma with the source chroma by the slider amount, keeping
+ * luminance untouched — the RawTherapee/darktable chroma-NR recipe.
+ * @param {(i: number, c: number) => number} sample linear channel value
+ * @param {Float32Array} luma Rec.709 linear luma plane (guide)
+ * @param {number} w @param {number} h
+ * @returns {Float32Array} interleaved [Co', Cg', …], length n·2
+ */
+export function computeChromaDenoisePlane(sample, luma, w, h) {
+  const n = w * h;
+  const co = new Float32Array(n);
+  const cg = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = sample(i, 0);
+    const g = sample(i, 1);
+    const b = sample(i, 2);
+    const c0 = r - b;
+    co[i] = c0;
+    cg[i] = g - (b + c0 / 2); // Cg = G − (B + Co/2)
+  }
+  const radius = Math.max(
+    1,
+    Math.round(NR.CHROMA_GF_RADIUS_FRAC * Math.max(w, h)),
+  );
+  const coOut = guidedFilter(luma, co, w, h, radius, NR.CHROMA_GF_EPS);
+  const cgOut = guidedFilter(luma, cg, w, h, radius, NR.CHROMA_GF_EPS);
+  const out = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    out[i * 2] = coOut[i];
+    out[i * 2 + 1] = cgOut[i];
+  }
+  return out;
+}
+
+/** @param {Uint16Array} pixels RGBA u16 preview @param {Float32Array} luma
+ * @param {number} w @param {number} h */
+export function computeChromaDenoiseFromRgba16(pixels, luma, w, h) {
+  return computeChromaDenoisePlane(
+    (i, c) => decodeInput(pixels[i * 4 + c] / 65535),
+    luma,
+    w,
+    h,
+  );
+}
+
+/**
+ * @param {{ data: Uint16Array | Uint8Array, width: number, height: number,
+ *           colors: number, bits: number }} image
+ * @param {Float32Array} luma
+ */
+export function computeChromaDenoiseFromImage(image, luma) {
+  const { data, width, height, colors, bits } = image;
+  const maxVal = bits === 16 ? 65535 : 255;
+  return computeChromaDenoisePlane(
+    (i, c) => decodeInput(data[i * colors + c] / maxVal),
+    luma,
+    width,
+    height,
+  );
+}
+
+/**
+ * Blend denoised chroma into one linear RGB pixel by the COLOR amount,
+ * preserving luminance (YCoCg, luma untouched). Mirrors colorNrBlend() in
+ * gl/shaders.js. Returns the new [r, g, b].
+ * @param {number} r @param {number} g @param {number} b
+ * @param {number} co denoised Co' @param {number} cg denoised Cg'
+ * @param {number} amount COLOR strength [0, 1]
+ * @returns {[number, number, number]}
+ */
+export function colorNrBlend(r, g, b, co, cg, amount) {
+  const Co = r - b;
+  const t = b + Co / 2;
+  const Cg = g - t;
+  const Y = t + Cg / 2;
+  const Co2 = Co + amount * (co - Co);
+  const Cg2 = Cg + amount * (cg - Cg);
+  const t2 = Y - Cg2 / 2;
+  const ng = Cg2 + t2;
+  const nb = t2 - Co2 / 2;
+  const nr = nb + Co2;
+  return [nr, ng, nb];
 }
 
 /**
@@ -338,19 +489,29 @@ export function dehazeTransmission(D, s) {
 
 /**
  * ΔY' plane for fixed slider values — the export-path equivalent of the
- * shader evaluating textureDelta/clarityDelta/nrDelta against the detail
+ * shader evaluating lumaNrDelta/textureDelta/clarityDelta against the detail
  * planes. Accumulates during the decomposition so full-resolution images
- * never hold all the level planes at once. `nr` is the noise-reduction
- * amount (the magnitude of a negative NOISE slider); it cores the finest
- * band only.
+ * never hold all the level planes at once. `lumaNoise` is the LUMINANCE NR
+ * amount and `detail` the DETAIL slider; together they core the finest three
+ * bands (a band's detail is the difference between consecutive levels).
  * @param {Float32Array} luma linear-light luma plane
  * @param {number} w @param {number} h
  * @param {number} scale integer ≥ 1
  * @param {number} texture slider [-1, 1]
  * @param {number} clarity slider [-1, 1]
- * @param {number} [nr] noise-reduction amount [0, 1]
+ * @param {number} [lumaNoise] LUMINANCE NR amount [0, 1]
+ * @param {number} [detail] DETAIL slider [0, 1]
  */
-export function computeDeltaPlane(luma, w, h, scale, texture, clarity, nr = 0) {
+export function computeDeltaPlane(
+  luma,
+  w,
+  h,
+  scale,
+  texture,
+  clarity,
+  lumaNoise = 0,
+  detail = 0.5,
+) {
   const n = w * h;
   const y0 = gammaPlane(luma);
   let cur = Float32Array.from(y0);
@@ -360,10 +521,12 @@ export function computeDeltaPlane(luma, w, h, scale, texture, clarity, nr = 0) {
   const levels = clarity !== 0 ? SPATIAL.DETAIL_LEVELS : SPATIAL.TEXTURE_BANDS;
   for (let j = 0; j < levels; j++) {
     atrousPass(cur, next, tmp, w, h, scale * (1 << j));
-    if (j === 0 && nr > 0) {
-      // finest band = y0 − c1 → soft-threshold coring (edge-preserving NR)
+    // luminance NR: soft-threshold (core) bands 0-2; band detail = cur − next
+    if (lumaNoise > 0 && j < SPATIAL.TEXTURE_BANDS) {
+      const tau = nrBandFloor(j, detail);
       for (let i = 0; i < n; i++) {
-        delta[i] += nrDelta(cur[i] - next[i], nr);
+        const d = cur[i] - next[i];
+        delta[i] += lumaNoise * (softThreshold(d, tau) - d);
       }
     }
     if (texture !== 0 && j < SPATIAL.TEXTURE_BANDS) {
@@ -389,11 +552,22 @@ export function computeDeltaPlane(luma, w, h, scale, texture, clarity, nr = 0) {
  * @param {number} base clarity residual plane value
  * @param {number} texture
  * @param {number} clarity
- * @param {number} [nr]
+ * @param {number} [lumaNoise] LUMINANCE NR amount [0, 1]
+ * @param {number} [detail] DETAIL slider [0, 1]
  */
-function detailDeltaAt(y0, c1, c2, c3, base, texture, clarity, nr = 0) {
+function detailDeltaAt(
+  y0,
+  c1,
+  c2,
+  c3,
+  base,
+  texture,
+  clarity,
+  lumaNoise = 0,
+  detail = 0.5,
+) {
   let delta = 0;
-  if (nr > 0) delta += nrDelta(y0 - c1, nr);
+  if (lumaNoise > 0) delta += lumaNrDelta(y0, c1, c2, c3, lumaNoise, detail);
   if (texture !== 0) {
     delta += textureDelta(y0 - c1, 0, texture);
     delta += textureDelta(c1 - c2, 1, texture);
@@ -849,16 +1023,20 @@ export function applyPresencePrepass(
   const localLightBalance = masks.some(
     (m) => (m.adjustments.lightBalance ?? 0) !== 0,
   );
-  // Negative NOISE slider = wavelet-shrinkage denoise on the finest band
-  // (positive NOISE is chromatic noise added in the display post-step).
-  const nr = Math.max(-(settings.noise ?? 0), 0);
+  // NOISE REDUCTION: multi-band luminance NR (LUMINANCE + DETAIL) and chroma
+  // NR (COLOR). Positive NOISE is chromatic noise added later in the display
+  // post-step, not here.
+  const lumaNoise = settings.lumaNoise ?? 0;
+  const colorNoise = settings.colorNoise ?? 0;
+  const noiseDetail = settings.noiseDetail ?? 0.5;
   if (
     sharpening === 0 &&
     lightBalance === 0 &&
     texture === 0 &&
     clarity === 0 &&
     dehaze === 0 &&
-    nr === 0 &&
+    lumaNoise === 0 &&
+    colorNoise === 0 &&
     !localPresence
   ) {
     return;
@@ -867,6 +1045,8 @@ export function applyPresencePrepass(
   const { data, width, height, colors, bits } = image;
   const maxVal = bits === 16 ? 65535 : 255;
   const luma = lumaFromImage(image);
+  const chroma =
+    colorNoise > 0 ? computeChromaDenoiseFromImage(image, luma) : null;
   const lightBalanceW =
     lightBalance !== 0 || localLightBalance
       ? computeLightBalanceWeightPlane(luma, width, height)
@@ -879,8 +1059,17 @@ export function applyPresencePrepass(
     ? computeDetailPlanes(luma, width, height, scale)
     : null;
   const delta =
-    !detail && (texture !== 0 || clarity !== 0 || nr > 0)
-      ? computeDeltaPlane(luma, width, height, scale, texture, clarity, nr)
+    !detail && (texture !== 0 || clarity !== 0 || lumaNoise > 0)
+      ? computeDeltaPlane(
+          luma,
+          width,
+          height,
+          scale,
+          texture,
+          clarity,
+          lumaNoise,
+          noiseDetail,
+        )
       : null;
   const sharpenDelta =
     sharpening !== 0 || localSharpening
@@ -900,7 +1089,21 @@ export function applyPresencePrepass(
       let r = decodeInput(data[p] / maxVal);
       let g = decodeInput(data[p + 1] / maxVal);
       let b = decodeInput(data[p + 2] / maxVal);
-      const ySrc = luma[i];
+      // color NR first: blend denoised chroma in (luminance preserved)
+      if (chroma && colorNoise > 0) {
+        [r, g, b] = colorNrBlend(
+          r,
+          g,
+          b,
+          chroma[i * 2],
+          chroma[i * 2 + 1],
+          colorNoise,
+        );
+      }
+      const ySrc =
+        chroma && colorNoise > 0
+          ? LUMA[0] * r + LUMA[1] * g + LUMA[2] * b
+          : luma[i];
       if (aux && dehaze !== 0) {
         const D = dehazeAmount(aux, (x + 0.5) / width, v, luma[i]);
         const t = dehazeTransmission(D, dehaze);
@@ -914,7 +1117,7 @@ export function applyPresencePrepass(
         r *= ratio;
         g *= ratio;
         b *= ratio;
-      } else if (detail && (texture !== 0 || clarity !== 0 || nr > 0)) {
+      } else if (detail && (texture !== 0 || clarity !== 0 || lumaNoise > 0)) {
         const y0 = Math.pow(Math.max(ySrc, 0), 1 / SPATIAL.GAMMA);
         const d = detailDeltaAt(
           y0,
@@ -924,7 +1127,8 @@ export function applyPresencePrepass(
           detail.base[i],
           texture,
           clarity,
-          nr,
+          lumaNoise,
+          noiseDetail,
         );
         const ratio = presenceRatio(ySrc, d);
         r *= ratio;

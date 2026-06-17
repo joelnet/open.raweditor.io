@@ -15,6 +15,10 @@ decoding, editing, and export all happen client-side.
 - **Tone**: exposure, contrast, highlights, shadows, whites, blacks, with auto
 - **Color**: vibrance (inverse-saturation weighted, velvia-style) and
   saturation (chroma scale around Rec.709 luma)
+- **Noise reduction**: separate luminance (multi-band à trous wavelet
+  shrinkage) and color (luma-guided chroma denoise) controls, plus a detail
+  slider; the per-image analysis runs once in a worker so the sliders stay
+  realtime
 - **Crop** with aspect presets, orientation flipping, and a custom ratio saved
   across sessions; **zoom / pan** with pinch support
 - **Histogram** (RGB, GPU-computed) and a shot-settings EXIF line
@@ -96,3 +100,19 @@ npx wrangler deploy
 
 A browser with WebGL2 and cross-origin isolation support: any recent Chrome,
 Firefox, Edge, or Safari 16.4+.
+
+## Special thanks
+
+This editor's image processing leans heavily on the open-source photography
+community — most operators are ports of theirs, with the constants and
+provenance documented inline in `src/tone/constants.js`. For the noise
+reduction in particular:
+
+- **[darktable](https://www.darktable.org/)** and
+  **[RawTherapee](https://rawtherapee.com/)** — the noise reduction follows
+  their wavelet-denoise recipe: multi-band à trous (B3-spline) wavelet
+  shrinkage with soft-threshold coring for luminance, and a luma-guided chroma
+  denoise for color. (The sharpening, texture, clarity, dehaze, and film-grain
+  operators draw on these two projects as well.)
+- **He et al., _Guided Image Filtering_ (ECCV 2010)** — the edge-aware guided
+  filter that smooths chroma while preserving luminance edges.
