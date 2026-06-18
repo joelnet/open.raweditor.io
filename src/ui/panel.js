@@ -409,6 +409,15 @@ export function buildPanel(
     resetBypass() {
       for (const entry of entries) setBypassed(entry, false);
     },
+    /** @returns {string[]} section titles currently preview-bypassed */
+    bypassedSections() {
+      return [...bypassed];
+    },
+    /** @param {readonly string[]} titles */
+    setBypassedSections(titles) {
+      const next = new Set(titles);
+      for (const entry of entries) setBypassed(entry, next.has(entry.title));
+    },
     /**
      * @param {boolean} busy
      * @param {"png" | "jpeg" | "tiff"} [format] which export is running

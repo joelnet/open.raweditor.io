@@ -580,6 +580,35 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
     updateSize();
   }
 
+  /**
+   * Restore persisted crop state without entering crop mode. The caller owns
+   * the layout pass because geometry changes can alter the canvas aspect.
+   * @param {{ rect?: Partial<import("../tone/tone-math.js").CropRect>,
+   *           geometry?: Partial<import("../tone/geometry.js").Geometry> }} state
+   */
+  function setEditState(state) {
+    if (active) exitMode(true);
+    const r = state.rect ?? {};
+    const w = Math.min(Math.max(Number(r.w ?? 1), 0.001), 1);
+    const h = Math.min(Math.max(Number(r.h ?? 1), 0.001), 1);
+    rect = {
+      x: Math.min(Math.max(Number(r.x ?? 0), 0), 1 - w),
+      y: Math.min(Math.max(Number(r.y ?? 0), 0), 1 - h),
+      w,
+      h,
+    };
+    const g = state.geometry ?? {};
+    orient = (Math.round(Number(g.orient ?? 0)) || 0) & 3;
+    angle = Math.min(Math.max(Number(g.angle ?? 0), -45), 45);
+    flipH = g.flipH === true;
+    flipV = g.flipV === true;
+    setChipsToFree();
+    syncAngleUi();
+    syncFlipUi();
+    updateBox();
+    updateSize();
+  }
+
   return {
     /** @returns {import("../tone/tone-math.js").CropRect} */
     rect: () => ({ ...rect }),
@@ -598,6 +627,7 @@ export function initCrop(viewport, canvas, panelContainer, handlers) {
     isActive: () => active,
     reposition,
     reset,
+    setEditState,
     /**
      * New image opened: remember its dimensions and reset the crop.
      * @param {number} previewW @param {number} previewH

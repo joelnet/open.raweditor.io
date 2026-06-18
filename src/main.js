@@ -18,6 +18,14 @@ import { initCollapse } from "./ui/collapse.js";
 import { createStatus } from "./ui/status.js";
 import { createExporter, downloadBlob } from "./export/export.js";
 import { initPwaUpdates, initInstallPrompt } from "./pwa.js";
+import {
+  createEditSnapshot,
+  deleteSavedEdit,
+  editKeyForFile,
+  loadSavedEdit,
+  pruneSavedEdits,
+  saveEdit,
+} from "./edit-persistence.js";
 
 initPwaUpdates();
 
@@ -49,6 +57,13 @@ let previewSize = null;
 /** @type {{ pixels: Uint16Array, width: number, height: number } | null} */
 let previewImage = null;
 let opening = false;
+let autosaveReady = false;
+let autosaveTimer = 0;
+/** @type {string | null} */
+let currentEditKey = null;
+/** @type {{ name: string, size: number, lastModified: number,
+ *           width?: number, height?: number } | null} */
+let currentFileInfo = null;
 
 // --- preview rendering, coalesced to one draw per frame ---
 
@@ -73,6 +88,63 @@ function queueRender() {
   });
 }
 store.subscribe(queueRender);
+
+function currentEditSnapshot() {
+  return createEditSnapshot({
+    settings: store.get(),
+    cropRect: crop.rect(),
+    geometry: crop.geometry(),
+    panelBypassed: panel.bypassedSections(),
+    masksBypassed: masks.isBypassed(),
+  });
+}
+
+function scheduleAutosave() {
+  if (!autosaveReady || !currentEditKey || !currentFileInfo || opening) return;
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = window.setTimeout(() => {
+    autosaveTimer = 0;
+    saveCurrentEdit();
+  }, 350);
+}
+
+function saveCurrentEdit() {
+  if (!autosaveReady || !currentEditKey || !currentFileInfo || opening) return;
+  saveEdit({
+    key: currentEditKey,
+    file: currentFileInfo,
+    edit: currentEditSnapshot(),
+  }).catch((err) => {
+    console.warn("could not save edits:", err);
+    status.setError(
+      `Could not save edits in this browser: ${/** @type {any} */ (err)?.message ?? err}`,
+    );
+  });
+}
+
+function cancelAutosave() {
+  autosaveReady = false;
+  if (autosaveTimer) {
+    clearTimeout(autosaveTimer);
+    autosaveTimer = 0;
+  }
+}
+
+/**
+ * @param {ReturnType<typeof createEditSnapshot>} edit
+ * @param {{ width: number, height: number }} preview
+ */
+function restoreEdit(edit, preview) {
+  panel.setBypassedSections(edit.panelBypassed);
+  masks.setBypassed(edit.masksBypassed);
+  crop.setEditState({ rect: edit.cropRect, geometry: edit.geometry });
+  const frame = frameSize();
+  masks.setFrameSize(
+    frame?.width ?? preview.width,
+    frame?.height ?? preview.height,
+  );
+  store.set(edit.settings);
+}
 
 /** Sliders with section bypasses applied, then disabled masks neutralized —
  * what the preview, histogram, and export should actually apply. */
@@ -113,6 +185,13 @@ function layout() {
   queueRender();
 }
 window.addEventListener("resize", layout);
+window.addEventListener("pagehide", () => {
+  if (autosaveTimer) {
+    clearTimeout(autosaveTimer);
+    autosaveTimer = 0;
+  }
+  saveCurrentEdit();
+});
 
 // --- open / decode ---
 
@@ -120,6 +199,9 @@ window.addEventListener("resize", layout);
 async function openFile(file) {
   if (!renderer || opening) return;
   opening = true;
+  cancelAutosave();
+  currentEditKey = null;
+  currentFileInfo = null;
   panel.setEnabled(false);
   crop.setEnabled(false);
   masks.setEnabled(false);
@@ -127,9 +209,17 @@ async function openFile(file) {
   status.setProgress("");
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
+    const editKeyPromise = editKeyForFile(file, bytes);
     const { meta, image, decodeMs } = await decoder.decode(bytes, {
       halfSize: true,
     });
+    const editKey = await editKeyPromise;
+    const savedEdit = editKey
+      ? await loadSavedEdit(editKey).catch((err) => {
+          console.warn("could not load saved edits:", err);
+          return null;
+        })
+      : null;
     const preview = boxDownscaleToRgba16(image);
     renderer.setImage(preview);
     // Presence (texture/clarity/dehaze) aux planes compute off-thread;
@@ -146,6 +236,14 @@ async function openFile(file) {
     previewImage = preview;
     previewSize = { width: preview.width, height: preview.height };
     currentFile = file;
+    currentEditKey = editKey;
+    currentFileInfo = {
+      name: file.name,
+      size: file.size,
+      lastModified: file.lastModified,
+      width: meta.width,
+      height: meta.height,
+    };
     canvas.hidden = false;
     dropzone.setVisible(false);
     panel.resetBypass();
@@ -154,7 +252,8 @@ async function openFile(file) {
     masks.setImage(preview.width, preview.height);
     zoom.reset();
     zoom.setEnabled(true);
-    store.set({ ...ZERO_SETTINGS });
+    if (savedEdit) restoreEdit(savedEdit, preview);
+    else store.set({ ...ZERO_SETTINGS });
     layout();
     panel.setEnabled(true);
     masks.setEnabled(true);
@@ -162,7 +261,8 @@ async function openFile(file) {
     histo.setExif(meta);
     status.setFile(
       `${file.name} · ${meta.camera_make} ${meta.camera_model} · ` +
-        `${meta.width}×${meta.height} (preview decoded in ${(decodeMs / 1000).toFixed(1)}s)`,
+        `${meta.width}×${meta.height} (preview decoded in ${(decodeMs / 1000).toFixed(1)}s)` +
+        (savedEdit ? " · edits restored" : ""),
     );
   } catch (err) {
     console.error(err);
@@ -181,6 +281,7 @@ async function openFile(file) {
       panel.setEnabled(true);
       crop.setEnabled(true);
       masks.setEnabled(true);
+      autosaveReady = !!currentEditKey;
     }
   }
 }
@@ -241,11 +342,16 @@ const crop = initCrop(viewport, canvas, panelScroll, {
   // in crop mode the canvas shows the full frame, so a rect change only
   // moves the overlay + histogram; outside it the rect is the visible
   // region and the canvas aspect must follow
-  onRectChange: () => (crop.isActive() ? queueRender() : layout()),
+  onRectChange: () => {
+    if (crop.isActive()) queueRender();
+    else layout();
+    scheduleAutosave();
+  },
   onModeChange: (active) => {
     zoom.setEnabled(!active && !!previewSize);
     masks.setCropActive(active);
     layout();
+    scheduleAutosave();
   },
   // 90° turn or straighten change: the frame aspect may have swapped, so
   // masks re-normalize and the whole layout (canvas aspect) follows
@@ -253,6 +359,7 @@ const crop = initCrop(viewport, canvas, panelScroll, {
     const frame = frameSize();
     if (frame) masks.setFrameSize(frame.width, frame.height);
     layout();
+    scheduleAutosave();
   },
 });
 const zoom = initZoom(canvas, viewport, {
@@ -265,7 +372,10 @@ const zoom = initZoom(canvas, viewport, {
 });
 const masks = initMasks(viewport, canvas, panelScroll, store, {
   getView: () => zoom.view(),
-  onUiChange: queueRender,
+  onUiChange: () => {
+    queueRender();
+    scheduleAutosave();
+  },
 });
 // Auto WB / auto tone: image statistics over the cropped preview. Auto tone
 // runs downstream of white balance, so it sees the current effective WB.
@@ -292,6 +402,8 @@ function onAuto(title) {
 // and zoom.
 function onRevert() {
   if (!previewSize) return;
+  const key = currentEditKey;
+  cancelAutosave();
   panel.resetBypass();
   masks.resetBypass();
   crop.reset(); // also clears rotation, so the frame is the source again
@@ -300,13 +412,25 @@ function onRevert() {
   zoom.setEnabled(true); // crop.reset() may have silently left crop mode
   store.set({ ...ZERO_SETTINGS });
   layout();
+  if (key) {
+    deleteSavedEdit(key).catch((err) => {
+      console.warn("could not delete saved edits:", err);
+      status.setError(
+        `Could not delete saved edits: ${/** @type {any} */ (err)?.message ?? err}`,
+      );
+    });
+  }
+  autosaveReady = !!currentEditKey;
 }
 
 // Close: discard the current image and return to the empty dropzone state.
 function onClose() {
   if (!currentFile || opening) return;
+  cancelAutosave();
   spatialToken++; // invalidate any in-flight presence analysis
   currentFile = null;
+  currentEditKey = null;
+  currentFileInfo = null;
   previewSize = null;
   previewImage = null;
   canvas.hidden = true;
@@ -327,11 +451,15 @@ function onClose() {
 const panel = buildPanel(panelScroll, store, {
   onExport,
   getExportSize: () => crop.exportSize(),
-  onBypassChange: queueRender,
+  onBypassChange: () => {
+    queueRender();
+    scheduleAutosave();
+  },
   onAuto,
   onRevert,
   onClose,
 });
+store.subscribe(() => scheduleAutosave());
 initInstallPrompt(panelScroll);
 const dropzone = initDropzone({
   onFile: openFile,
@@ -351,6 +479,9 @@ if (!renderer) {
 } else {
   status.setFile("No file loaded: drop a RAW file");
   store.set({ ...ZERO_SETTINGS }); // sync slider readouts
+  pruneSavedEdits().catch((err) =>
+    console.warn("could not prune saved edits:", err),
+  );
 
   // Automation/debug hook: ?open=<sample-name> fetches from /samples/.
   const auto = new URLSearchParams(location.search).get("open");

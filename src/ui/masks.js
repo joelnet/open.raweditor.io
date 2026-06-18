@@ -1120,5 +1120,18 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       eye.innerHTML = EYE_OPEN;
       eye.setAttribute("aria-pressed", "true");
     },
+    /** @returns {boolean} */
+    isBypassed() {
+      return bypassed;
+    },
+    /** @param {boolean} off */
+    setBypassed(off) {
+      bypassed = off;
+      section.classList.toggle("bypassed", bypassed);
+      eye.innerHTML = bypassed ? EYE_CLOSED : EYE_OPEN;
+      eye.setAttribute("aria-pressed", String(!bypassed));
+      syncUi();
+      drawOverlay();
+    },
   };
 }
