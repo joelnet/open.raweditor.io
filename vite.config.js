@@ -26,7 +26,7 @@ export default defineConfig({
     {
       name: "raw-editor-version",
       transformIndexHtml(html) {
-        return html.replace("%APP_VERSION%", `v${pkg.version}`);
+        return html.replaceAll("%APP_VERSION%", `v${pkg.version}`);
       },
     },
     ...(useHttps ? [basicSsl()] : []),

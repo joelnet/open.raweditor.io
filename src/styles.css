@@ -219,6 +219,10 @@ body {
   color: var(--muted);
 }
 
+#dz-version {
+  display: none;
+}
+
 button {
   font: inherit;
   color: var(--text);
@@ -511,6 +515,16 @@ button:disabled {
 
   #dropzone {
     inset: 12px;
+  }
+
+  #dz-version {
+    display: block;
+    position: absolute;
+    right: 10px;
+    bottom: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    opacity: 0.7;
   }
 
   /* histogram: swap the panel section for the corner toggle + overlay */
@@ -1268,6 +1282,12 @@ button:disabled {
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  #statusbar {
+    display: none;
+  }
 }
 
 #status-bar-progress {
