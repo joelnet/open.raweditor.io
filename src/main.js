@@ -207,6 +207,7 @@ async function openFile(file) {
   masks.setEnabled(false);
   status.setFile(`Decoding ${file.name}…`);
   status.setProgress("");
+  status.setBusy(true);
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const editKeyPromise = editKeyForFile(file, bytes);
@@ -277,6 +278,7 @@ async function openFile(file) {
     if (!currentFile) dropzone.setVisible(true);
   } finally {
     opening = false;
+    status.clearProgressBar();
     if (currentFile) {
       panel.setEnabled(true);
       crop.setEnabled(true);
@@ -299,6 +301,7 @@ async function onExport(opts) {
   panel.setExportBusy(true, format);
   try {
     status.setProgress("Export: decoding full resolution…");
+    status.setBusy(true);
     const bytes = new Uint8Array(await file.arrayBuffer());
     const { image } = await decoder.decode(bytes, {});
     status.setProgress("Export: applying tone…");
@@ -311,9 +314,11 @@ async function onExport(opts) {
       previewSize?.width ?? 0,
       { width, height },
       (done, total) => {
+        const ratio = total > 0 ? done / total : 0;
         status.setProgress(
-          `Export: applying tone… ${Math.round((done / total) * 100)}%`,
+          `Export: applying tone… ${Math.round(ratio * 100)}%`,
         );
+        status.setProgressValue(ratio);
       },
     );
     const ext =
@@ -330,6 +335,7 @@ async function onExport(opts) {
     );
   } finally {
     panel.setExportBusy(false);
+    status.clearProgressBar();
   }
 }
 
@@ -446,6 +452,7 @@ function onClose() {
   store.set({ ...ZERO_SETTINGS });
   status.setFile("No file loaded: drop a RAW file");
   status.setProgress("");
+  status.clearProgressBar();
 }
 
 const panel = buildPanel(panelScroll, store, {
