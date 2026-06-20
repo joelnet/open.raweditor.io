@@ -15,6 +15,7 @@ import { initDropzone } from "./ui/dropzone.js";
 import { initDivider } from "./ui/divider.js";
 import { initElevator } from "./ui/elevator.js";
 import { initCollapse } from "./ui/collapse.js";
+import { initCompare } from "./ui/compare.js";
 import { createStatus } from "./ui/status.js";
 import { createExporter, downloadBlob } from "./export/export.js";
 import { initPwaUpdates, initInstallPrompt } from "./pwa.js";
@@ -73,7 +74,11 @@ function queueRender() {
   renderQueued = true;
   requestAnimationFrame(() => {
     renderQueued = false;
-    const settings = effectiveSettings();
+    // Compare toggle: render the original tone (and no local masks) while
+    // still applying the user's crop/geometry, so before/after lines up.
+    const settings = compare.isBefore()
+      ? { ...ZERO_SETTINGS }
+      : effectiveSettings();
     const geometry = crop.geometry();
     // crop mode shows the full frame under the overlay; otherwise the
     // zoom/pan window inside the crop. The histogram always reflects the
@@ -260,6 +265,7 @@ async function openFile(file) {
     masks.setEnabled(true);
     histo.setHasImage(true);
     histo.setExif(meta);
+    compare.setHasImage(true);
     status.setFile(
       `${file.name} · ${meta.camera_make} ${meta.camera_model} · ` +
         `${meta.width}×${meta.height} (preview decoded in ${(decodeMs / 1000).toFixed(1)}s)` +
@@ -344,6 +350,7 @@ async function onExport(opts) {
 // Section order in the sidebar follows init order: HISTOGRAM, CROP, then
 // the panel's slider sections and EXPORT.
 const histo = initHistogram(panelScroll, viewport, { onToggle: queueRender });
+const compare = initCompare(viewport, canvas, { onToggle: queueRender });
 const crop = initCrop(viewport, canvas, panelScroll, {
   // in crop mode the canvas shows the full frame, so a rect change only
   // moves the overlay + histogram; outside it the rect is the visible
@@ -447,6 +454,7 @@ function onClose() {
   zoom.setEnabled(false);
   histo.setHasImage(false);
   histo.setExif(null);
+  compare.setHasImage(false);
   panel.resetBypass();
   masks.resetBypass();
   store.set({ ...ZERO_SETTINGS });

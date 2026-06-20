@@ -84,6 +84,38 @@ body {
   display: block;
 }
 
+/* ---- compare toggle: global before/after, top-left of the viewport ---- */
+
+#compare-toggle {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  background: rgba(27, 33, 51, 0.85);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none; /* hold gestures must not scroll/zoom the page */
+}
+
+#compare-toggle.active {
+  color: var(--accent-yellow);
+  border-color: var(--accent-yellow);
+}
+
+/* On mobile the comparison is invoked by long-pressing the image itself
+   (see initCompare in ui/compare.js), so the button is redundant there. */
+@media (max-width: 768px) {
+  #compare-toggle {
+    display: none;
+  }
+}
+
 /* ---- crop overlay: shaded surround, thirds grid, 8 handles ---- */
 
 #crop-overlay {
@@ -1290,12 +1322,15 @@ button:disabled {
   }
 }
 
+/* Lives at the very top of the viewport so it's always visible during
+   decode/export — independent of the statusbar (which is hidden on mobile). */
 #status-bar-progress {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
   height: 2px;
+  z-index: 11;
   pointer-events: none;
   opacity: 0;
   overflow: hidden;
