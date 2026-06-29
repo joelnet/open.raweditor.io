@@ -4,7 +4,9 @@ import { ZERO_MASK_ADJUSTMENTS } from "./tone/mask-math.js";
 
 const DB_NAME = "open-raw-editor";
 const STORE_NAME = "edits";
-const DB_VERSION = 1;
+/** Presets share the DB; see presets.js. Bumping DB_VERSION added this store. */
+export const PRESET_STORE_NAME = "presets";
+const DB_VERSION = 2;
 export const EDIT_SCHEMA_VERSION = 1;
 export const MAX_EDIT_RECORDS = 100;
 export const RETENTION_MONTHS = 6;
@@ -277,7 +279,7 @@ export function recordsToPrune(
 }
 
 /** @template T @param {IDBRequest<T>} req */
-function requestPromise(req) {
+export function requestPromise(req) {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -285,7 +287,7 @@ function requestPromise(req) {
 }
 
 /** @param {IDBTransaction} tx */
-function txDone(tx) {
+export function txDone(tx) {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve(undefined);
     tx.onabort = () => reject(tx.error);
@@ -293,17 +295,31 @@ function txDone(tx) {
   });
 }
 
-function openDb() {
+/**
+ * Open the shared app database. Presets (presets.js) reuse this so both
+ * modules open DB_NAME at the same DB_VERSION — opening one name at two
+ * versions throws VersionError, so this is the single owner of the schema.
+ * @returns {Promise<IDBDatabase>}
+ */
+export function openDb() {
   if (!globalThis.indexedDB) {
     throw new Error("IndexedDB is unavailable");
   }
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    // Additive upgrade: each store is created only if missing, so v1 users
+    // keep their `edits` and just gain `presets`.
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         const store = db.createObjectStore(STORE_NAME, { keyPath: "key" });
         store.createIndex("updatedAt", "updatedAt");
+      }
+      if (!db.objectStoreNames.contains(PRESET_STORE_NAME)) {
+        const presets = db.createObjectStore(PRESET_STORE_NAME, {
+          keyPath: "id",
+        });
+        presets.createIndex("updatedAt", "updatedAt");
       }
     };
     req.onsuccess = () => resolve(req.result);

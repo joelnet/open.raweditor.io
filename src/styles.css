@@ -594,7 +594,7 @@ button:disabled {
     width: 32px;
     height: 32px;
     margin: -8px -2px -8px -8px;
-    font-size: 19px;
+    font-size: 22px;
   }
 
   .slider-row input[type="range"] {
@@ -726,7 +726,7 @@ button:disabled {
   border: none;
   border-radius: 3px;
   color: var(--muted);
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1;
   cursor: pointer;
@@ -1114,6 +1114,129 @@ button:disabled {
 .section.bypassed .effects-tools {
   opacity: 0.45;
   pointer-events: none;
+}
+
+/* ---- presets: top-of-panel look strip + manage dialog ---- */
+
+.section.section-presets {
+  border-left-color: var(--accent-blue);
+}
+
+.preset-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 10px 12px 4px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* the pills are the affordance; hide the bar */
+}
+
+.preset-strip::-webkit-scrollbar {
+  height: 0;
+}
+
+.preset-strip[hidden] {
+  display: none;
+}
+
+.preset-pill {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 7px 12px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+.preset-pill:hover:not(:disabled) {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.preset-empty {
+  padding: 8px 12px 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.preset-empty[hidden] {
+  display: none;
+}
+
+.preset-actions {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+}
+
+.preset-actions button {
+  flex: 1;
+  min-width: 0;
+}
+
+.preset-save:hover:not(:disabled),
+.preset-manage:hover:not(:disabled) {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.preset-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.preset-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preset-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-row button {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.preset-del.confirm {
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+}
+
+.preset-manage-tools {
+  display: flex;
+  gap: 6px;
+}
+
+.preset-manage-tools button {
+  flex: 1;
+  min-width: 0;
+}
+
+/* larger touch targets for the look strip + manage controls */
+@media (pointer: coarse) {
+  .preset-pill,
+  .preset-actions button {
+    min-height: 44px;
+  }
+
+  .preset-row button,
+  .preset-manage-tools button {
+    min-height: 40px;
+  }
 }
 
 .export-body {

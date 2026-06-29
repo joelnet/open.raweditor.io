@@ -391,9 +391,9 @@ export const GRADE_KEYS = /** @type {readonly SliderKey[]} */ ([
 export const SECTIONS = [
   { title: "WHITE BALANCE", sliders: WB_SLIDERS, auto: true },
   { title: "TONE", sliders: TONE_SLIDERS, auto: true },
+  { title: "COLOR", sliders: COLOR_SLIDERS, auto: false },
   { title: "PRESENCE", sliders: PRESENCE_SLIDERS, auto: false },
   { title: "NOISE REDUCTION", sliders: NR_SLIDERS, auto: false },
-  { title: "COLOR", sliders: COLOR_SLIDERS, auto: false },
   { title: "COLOR MIXER", sliders: [], auto: false, mixer: true },
   {
     title: "COLOR GRADING",

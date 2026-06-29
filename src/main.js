@@ -16,10 +16,12 @@ import { initDivider } from "./ui/divider.js";
 import { initElevator } from "./ui/elevator.js";
 import { initCollapse } from "./ui/collapse.js";
 import { initCompare } from "./ui/compare.js";
+import { buildPresets } from "./ui/presets.js";
 import { createStatus } from "./ui/status.js";
 import { createExporter, downloadBlob } from "./export/export.js";
 import { initPwaUpdates, initInstallPrompt } from "./pwa.js";
 import {
+  cloneSettings,
   createEditSnapshot,
   deleteSavedEdit,
   editKeyForFile,
@@ -208,6 +210,7 @@ async function openFile(file) {
   currentEditKey = null;
   currentFileInfo = null;
   panel.setEnabled(false);
+  presets.setEnabled(false);
   crop.setEnabled(false);
   masks.setEnabled(false);
   status.setFile(`Decoding ${file.name}…`);
@@ -262,6 +265,7 @@ async function openFile(file) {
     else store.set({ ...ZERO_SETTINGS });
     layout();
     panel.setEnabled(true);
+    presets.setEnabled(true);
     masks.setEnabled(true);
     histo.setHasImage(true);
     histo.setExif(meta);
@@ -287,6 +291,7 @@ async function openFile(file) {
     status.clearProgressBar();
     if (currentFile) {
       panel.setEnabled(true);
+      presets.setEnabled(true);
       crop.setEnabled(true);
       masks.setEnabled(true);
       autosaveReady = !!currentEditKey;
@@ -449,6 +454,7 @@ function onClose() {
   canvas.hidden = true;
   dropzone.setVisible(true);
   panel.setEnabled(false);
+  presets.setEnabled(false);
   crop.setEnabled(false);
   masks.setEnabled(false);
   zoom.setEnabled(false);
@@ -475,6 +481,20 @@ const panel = buildPanel(panelScroll, store, {
   onClose,
 });
 store.subscribe(() => scheduleAutosave());
+
+// Presets: a file-agnostic look (global scalars only) saved once and applied
+// to any image. Saving captures the visible/effective settings; applying
+// REPLACES the scalar adjustments but leaves the live masks, crop, and
+// geometry untouched (those are image-specific). store.set() then drives the
+// existing render + autosave subscriptions, so there's no special wiring.
+const presets = buildPresets(panelScroll, {
+  getLook: () => panel.effectiveSettings(store.get()),
+  applyLook: (settings) => {
+    const patch = cloneSettings(settings);
+    delete (/** @type {Partial<typeof patch>} */ (patch).masks);
+    store.set(patch);
+  },
+});
 initInstallPrompt(panelScroll);
 const dropzone = initDropzone({
   onFile: openFile,
