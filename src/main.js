@@ -11,7 +11,7 @@ import { initHistogram } from "./ui/histogram.js";
 import { initCrop } from "./ui/crop.js";
 import { initMasks } from "./ui/masks.js";
 import { initZoom } from "./ui/zoom.js";
-import { initDropzone } from "./ui/dropzone.js";
+import { initDropzone, isSupportedRaw } from "./ui/dropzone.js";
 import { initDivider } from "./ui/divider.js";
 import { initElevator } from "./ui/elevator.js";
 import { initCollapse } from "./ui/collapse.js";
@@ -20,6 +20,7 @@ import { buildPresets } from "./ui/presets.js";
 import { createStatus } from "./ui/status.js";
 import { createExporter, downloadBlob } from "./export/export.js";
 import { initPwaUpdates, initInstallPrompt } from "./pwa.js";
+import { consumeSharedFile, initFileHandler } from "./launch.js";
 import {
   cloneSettings,
   createEditSnapshot,
@@ -496,11 +497,19 @@ const presets = buildPresets(panelScroll, {
   },
 });
 initInstallPrompt(panelScroll);
-const dropzone = initDropzone({
-  onFile: openFile,
-  onReject: (name) =>
-    status.setError(`${name} is not a supported RAW file (.ARW, .RAF, .DNG)`),
-});
+/** @param {string} name */
+function rejectFile(name) {
+  status.setError(`${name} is not a supported RAW file (.ARW, .RAF, .DNG)`);
+}
+const dropzone = initDropzone({ onFile: openFile, onReject: rejectFile });
+
+/** Files the OS hands over (file handler, share sheet) skip the dropzone's
+ * extension check, so they get it here.
+ * @param {File} file */
+function intakeFile(file) {
+  if (isSupportedRaw(file)) openFile(file);
+  else rejectFile(file.name);
+}
 // Collapse every section by default (except EXPORT / REVERT) — runs after all
 // sections (histogram, crop, masks, and the panel sections) are in the DOM.
 initCollapse(panelScroll);
@@ -517,6 +526,25 @@ if (!renderer) {
   pruneSavedEdits().catch((err) =>
     console.warn("could not prune saved edits:", err),
   );
+
+  // Installed-PWA entry points: "Open with…" on the desktop, the Android
+  // share sheet. Both hand over a file directly; see launch.js.
+  initFileHandler({
+    onFile: intakeFile,
+    onError: (err) =>
+      status.setError(
+        `Could not open the file: ${/** @type {any} */ (err)?.message ?? err}`,
+      ),
+  });
+  consumeSharedFile()
+    .then((file) => {
+      if (file) intakeFile(file);
+    })
+    .catch((err) =>
+      status.setError(
+        `Could not open the shared file: ${/** @type {any} */ (err)?.message ?? err}`,
+      ),
+    );
 
   // Automation/debug hook: ?open=<sample-name> fetches from /samples/.
   const auto = new URLSearchParams(location.search).get("open");

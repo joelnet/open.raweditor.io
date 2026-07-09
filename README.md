@@ -26,6 +26,9 @@ decoding, editing, and export all happen client-side.
 - **Export** full-resolution PNG, JPG, or uncompressed 16-bit TIFF; the CPU
   path in a worker applies the exact same math as the preview shader
 - Responsive layout with a draggable split on touch devices
+- **Installable**, and once installed the OS can hand files straight to it:
+  "Open with…" / double-click on the desktop (File Handling API) and the
+  Android share sheet (Web Share Target)
 
 ## Architecture
 
@@ -36,9 +39,11 @@ src/
   tone/      pure-JS tone pipeline, shared constants, auto WB/tone statistics
   export/    full-resolution export worker (CPU tone mapping, chunked)
   ui/        panel, crop, zoom, histogram, dropzone, status bar, ...
+  launch.js  files handed over by the OS: File Handling + Web Share Target
   state.js   slider definitions + a minimal observable store
   main.js    wiring
 server/      Hono static server for the production build
+public/      copied verbatim into the build (icons, _headers, share worker)
 ```
 
 The tone pipeline (white balance → exposure → whites/blacks → contrast →
@@ -46,6 +51,27 @@ highlights/shadows → vibrance/saturation → sRGB encode) is implemented twice
 once in GLSL for the preview and histogram, once in JS for the full-res
 export. Both interpolate their constants from `src/tone/constants.js` so they
 cannot drift apart.
+
+### How a file gets in
+
+Besides the dropzone, an installed app is offered two OS-level entry points,
+declared in the manifest (`vite.config.js`) and picked up by `src/launch.js`:
+
+- **File Handling** — `file_handlers` registers the app against `.arw`,
+  `.raf`, and `.dng`, so "Open with…" or a double-click launches it.
+  Chromium delivers the handles on `window.launchQueue`.
+- **Web Share Target** — `share_target` puts the app in the Android share
+  sheet. Files can only be shared into a PWA over a multipart POST, and
+  Cloudflare's static assets answer nothing but GET, so `public/share-target-sw.js`
+  takes the POST inside the service worker, parks the file in a Cache, and
+  redirects to `/?share-target=1`, where the page picks it up.
+
+Neither member is honored outside Chromium, and both no-op there rather than
+degrading anything. `protocol_handlers` is deliberately absent: it registers
+URL schemes (`web+raw://…`), not file types, so it cannot open a local file
+and does nothing for this app. `launch_handler` is absent for a sharper
+reason — its `focus-existing` mode suppresses the launch navigation, and the
+share target *is* a navigation, so opting in would silently drop shared files.
 
 ## Development
 

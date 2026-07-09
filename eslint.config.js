@@ -28,6 +28,16 @@ export default [
     },
   },
   {
+    // Copied verbatim into the build and imported by the generated service
+    // worker, so it runs in worker scope rather than the bundle's.
+    files: ["public/*.js"],
+    languageOptions: {
+      globals: {
+        ...globals.serviceworker,
+      },
+    },
+  },
+  {
     files: ["scripts/**"],
     languageOptions: {
       globals: {

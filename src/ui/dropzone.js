@@ -4,6 +4,15 @@
 const ACCEPTED = /\.(arw|raf|dng)$/i;
 
 /**
+ * Also used for files the OS hands straight to the app, which never pass
+ * through the dropzone — see src/launch.js.
+ * @param {File} file
+ */
+export function isSupportedRaw(file) {
+  return ACCEPTED.test(file.name);
+}
+
+/**
  * @param {{ onFile: (file: File) => void, onReject: (name: string) => void }} handlers
  */
 export function initDropzone({ onFile, onReject }) {
@@ -20,7 +29,7 @@ export function initDropzone({ onFile, onReject }) {
   /** @param {File | undefined | null} file */
   function handle(file) {
     if (!file) return;
-    if (!ACCEPTED.test(file.name)) {
+    if (!isSupportedRaw(file)) {
       onReject(file.name);
       return;
     }
