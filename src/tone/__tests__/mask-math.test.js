@@ -8,8 +8,6 @@ import {
   stampBrush,
   prepareMask,
   maskWeight,
-  effectiveMasks,
-  ZERO_MASK_ADJUSTMENTS,
 } from "../mask-math.js";
 import { ZERO_SETTINGS, applyTonePixel, srgbEncode } from "../tone-math.js";
 import { MASK } from "../constants.js";
@@ -347,27 +345,5 @@ test("masks stack: two masks apply sequentially", () => {
   assert.ok(Math.abs(both[0] - twoEv[0]) < 1e-9);
 });
 
-// --- effectiveMasks ---
-
-test("effectiveMasks neutralizes disabled masks but keeps their geometry", () => {
-  const on = createRadialMask(0.5, 0.5);
-  on.adjustments = { ...on.adjustments, exposure: 1 };
-  const off = { ...createLinearMask(0.5, 0.5), enabled: false };
-  off.adjustments = { ...off.adjustments, exposure: 2 };
-  const s = effectiveMasks({ ...ZERO_SETTINGS, masks: [off, on] });
-  assert.equal(s.masks.length, 2);
-  assert.deepEqual(s.masks[0].adjustments, ZERO_MASK_ADJUSTMENTS);
-  assert.equal(s.masks[1].adjustments.exposure, 1);
-  assert.equal(s.masks[0].type, "linear");
-});
-
-test("effectiveMasks bypassAll neutralizes everything", () => {
-  const on = createRadialMask(0.5, 0.5);
-  on.adjustments = { ...on.adjustments, exposure: 1 };
-  const s = effectiveMasks({ ...ZERO_SETTINGS, masks: [on] }, true);
-  assert.deepEqual(s.masks[0].adjustments, ZERO_MASK_ADJUSTMENTS);
-});
-
-test("effectiveMasks with no masks returns settings unchanged", () => {
-  assert.equal(effectiveMasks(ZERO_SETTINGS), ZERO_SETTINGS);
-});
+// (effectiveMaskGroups — the group-model settings adapter — is covered in
+// mask-groups.test.js.)

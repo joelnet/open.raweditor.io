@@ -19,7 +19,7 @@
 
 import { LUMA, TONE, SPATIAL, NR } from "./constants.js";
 import { decodeInput, encodeInput } from "./tone-math.js";
-import { prepareMask, maskWeight } from "./mask-math.js";
+import { prepareGroup, groupWeight } from "./mask-math.js";
 import { ZERO_GEOMETRY, orientedDims, coverScale } from "./geometry.js";
 
 // --- luminance planes -------------------------------------------------
@@ -1078,7 +1078,7 @@ export function applyPresencePrepass(
   const frame = orientedDims(geometry.orient, width, height);
   const prepared =
     localPresence && masks.length
-      ? masks.map((mk) => prepareMask(mk, frame.width, frame.height))
+      ? masks.map((mk) => prepareGroup(mk, frame.width, frame.height))
       : null;
 
   for (let y = 0; y < height; y++) {
@@ -1151,7 +1151,7 @@ export function applyPresencePrepass(
         );
         for (let mi = 0; mi < masks.length; mi++) {
           const a = masks[mi].adjustments;
-          const mw = maskWeight(prepared[mi], fx, fy);
+          const mw = groupWeight(prepared[mi], fx, fy);
           if (mw <= 0) continue;
           const md = (a.dehaze ?? 0) * mw;
           if (aux && md !== 0) {
