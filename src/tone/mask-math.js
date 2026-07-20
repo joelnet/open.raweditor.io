@@ -242,8 +242,10 @@ export function stampBrush(
  */
 
 /**
- * Resolve a mask's normalized parameters against an image's pixel grid.
- * @param {Mask} mask
+ * Resolve a shape's normalized parameters against an image's pixel grid.
+ * Accepts a legacy Mask or a MaskComponent — both carry the same geometry
+ * and coverage fields.
+ * @param {Mask | MaskComponent} mask
  * @param {number} width image px
  * @param {number} height
  * @returns {PreparedMask}
@@ -362,26 +364,314 @@ export function maskWeight(p, px, py) {
   return p.invert ? 1 - m : m;
 }
 
+// ---------------------------------------------------------------------------
+// Mask groups (compound masks)
+//
+// A mask is a *group*: one adjustment set applied through the composite of
+// several live shape components. Each component is a linear/radial/brush
+// shape — the same geometry and coverage fields as a legacy Mask — with a
+// `mode` that decides whether it adds to or subtracts from the group's
+// composite weight. Components stay parametric and individually re-editable;
+// nothing is ever flattened to a raster (the Lightroom / Capture One 16.7
+// model). The composite is order-independent:
+//
+//   A = 1 − Π over adds (1 − wᵢ)        probabilistic union ("screen")
+//   W = A · Π over subtracts (1 − wⱼ)   each subtract is a soft eraser
+//   W = group.invert ? 1 − W : W
+//
+// Screen over max(): the max of two smooth fields has a derivative crease
+// along their equal-weight ridge, which reads as a tone crease when the
+// mask drives exposure across a smooth sky; screen is C¹ there and mild
+// overlap buildup is the intuitive "two coats" result. Intersect needs no
+// operator of its own — a subtract component with `invert` multiplies the
+// composite by that shape's weight.
+
 /**
- * Settings with disabled masks neutralized (geometry kept so mask indices
- * stay stable for the overlay visualization, adjustments zeroed) and the
- * list capped at the shader's uniform-array bound.
- * @template {{ masks: readonly Mask[] }} S
+ * One shape inside a mask group. Same geometry/coverage semantics as Mask;
+ * `invert` flips this shape's own weight before it enters the composite
+ * (subtract + invert ≡ intersect). No per-component `enabled` or
+ * `adjustments` — the group owns bypass and the adjustment set. `id` is the
+ * stable identity for selection, overlays, and GPU brush-layer bookkeeping;
+ * array indices are not identity.
+ * @typedef {{ id: string, mode: "add" | "subtract",
+ *             type: "linear" | "radial" | "brush", invert: boolean,
+ *             x: number, y: number, angle: number, range: number,
+ *             radiusX: number, radiusY: number, feather: number,
+ *             coverage?: Uint8Array | null, coverageW?: number,
+ *             coverageH?: number, coverageVersion?: number }} MaskComponent
+ */
+
+/**
+ * A mask: one adjustment set applied through the composite of its
+ * components. `invert` flips the final composite (not the children).
+ * @typedef {{ id: string, enabled: boolean, invert: boolean,
+ *             adjustments: MaskAdjustments,
+ *             components: MaskComponent[] }} MaskGroup
+ */
+
+let idSeq = 0;
+/**
+ * Stable id for groups and components. randomUUID needs a secure context
+ * and the dev server also runs on plain http origins, so fall back to a
+ * counter + random suffix — ids only need to be unique within one edit.
+ * @returns {string}
+ */
+export function newMaskId() {
+  idSeq += 1;
+  if (typeof globalThis.crypto?.randomUUID === "function")
+    return crypto.randomUUID();
+  return `m${idSeq.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * @param {Mask} mask shape donor; its coverage raster (if any) is adopted,
+ *   not copied
+ * @param {"add" | "subtract"} mode
+ * @returns {MaskComponent}
+ */
+function componentFromMask(mask, mode) {
+  /** @type {MaskComponent} */
+  const component = {
+    id: newMaskId(),
+    mode,
+    type: mask.type,
+    invert: mask.invert,
+    x: mask.x,
+    y: mask.y,
+    angle: mask.angle,
+    range: mask.range,
+    radiusX: mask.radiusX,
+    radiusY: mask.radiusY,
+    feather: mask.feather,
+  };
+  if (mask.type === "brush") {
+    component.coverage = mask.coverage ?? null;
+    component.coverageW = mask.coverageW;
+    component.coverageH = mask.coverageH;
+    component.coverageVersion = mask.coverageVersion ?? 0;
+  }
+  return component;
+}
+
+/**
+ * @param {number} [x] anchor, image UV
+ * @param {number} [y]
+ * @param {"add" | "subtract"} [mode]
+ * @returns {MaskComponent}
+ */
+export function createLinearComponent(x = 0.5, y = 0.5, mode = "add") {
+  return componentFromMask(createLinearMask(x, y), mode);
+}
+
+/**
+ * @param {number} [x] center, image UV
+ * @param {number} [y]
+ * @param {"add" | "subtract"} [mode]
+ * @returns {MaskComponent}
+ */
+export function createRadialComponent(x = 0.5, y = 0.5, mode = "add") {
+  return componentFromMask(createRadialMask(x, y), mode);
+}
+
+/**
+ * @param {number} coverageW grid width (see brushCoverageDims)
+ * @param {number} coverageH grid height
+ * @param {"add" | "subtract"} [mode]
+ * @returns {MaskComponent}
+ */
+export function createBrushComponent(coverageW, coverageH, mode = "add") {
+  return componentFromMask(createBrushMask(coverageW, coverageH), mode);
+}
+
+/**
+ * A new mask group around its first component.
+ * @param {MaskComponent} component
+ * @returns {MaskGroup}
+ */
+export function createMaskGroup(component) {
+  return {
+    id: newMaskId(),
+    enabled: true,
+    invert: false,
+    adjustments: { ...ZERO_MASK_ADJUSTMENTS },
+    components: [component],
+  };
+}
+
+/**
+ * Migrate a legacy single-shape mask to a group of one add component.
+ * Renders identically: the group composite of one add component is that
+ * component's weight, and the legacy `invert` moves onto the component.
+ * The component adopts the legacy coverage raster (the caller discards the
+ * legacy mask), the adjustments are copied.
+ * @param {Mask} mask
+ * @returns {MaskGroup}
+ */
+export function maskGroupFromLegacy(mask) {
+  return {
+    id: newMaskId(),
+    enabled: mask.enabled,
+    invert: false,
+    adjustments: { ...mask.adjustments },
+    components: [componentFromMask(mask, "add")],
+  };
+}
+
+/**
+ * Precomputed pixel-space form of a group, for tight per-pixel loops.
+ * @typedef {{ invert: boolean,
+ *             components: { subtract: boolean,
+ *                           prepared: PreparedMask }[] }} PreparedGroup
+ */
+
+/**
+ * Resolve a group's components against an image's pixel grid.
+ * @param {MaskGroup} group
+ * @param {number} width image px
+ * @param {number} height
+ * @returns {PreparedGroup}
+ */
+export function prepareGroup(group, width, height) {
+  return {
+    invert: group.invert,
+    components: group.components.map((c) => ({
+      subtract: c.mode === "subtract",
+      prepared: prepareMask(c, width, height),
+    })),
+  };
+}
+
+/**
+ * Composite group weight at one pixel, in [0, 1]. Order-independent (see
+ * the section comment); a group with no add components weighs 0
+ * everywhere — the UI warns about empty masks instead of special-casing
+ * the math here.
+ * @param {PreparedGroup} pg
+ * @param {number} px pixel x (image space)
+ * @param {number} py
+ */
+export function groupWeight(pg, px, py) {
+  let addP = 1; // Π (1 − wᵢ) over add components
+  let subP = 1; // Π (1 − wⱼ) over subtract components
+  for (const c of pg.components) {
+    const w = maskWeight(c.prepared, px, py);
+    if (c.subtract) subP *= 1 - w;
+    else addP *= 1 - w;
+  }
+  const w = (1 - addP) * subP;
+  return pg.invert ? 1 - w : w;
+}
+
+/**
+ * Bilinearly resample a coverage grid to new dimensions, preserving the
+ * frame-UV field (texel-center convention, clamp-to-edge — the same
+ * sampling the preview and export use, so the re-gridded raster renders
+ * where the old one did).
+ * @param {Uint8Array} cov
+ * @param {number} w source grid width
+ * @param {number} h
+ * @param {number} nw target grid width
+ * @param {number} nh
+ * @returns {Uint8Array}
+ */
+export function resampleCoverage(cov, w, h, nw, nh) {
+  const out = new Uint8Array(nw * nh);
+  const src = { cov, w, h };
+  for (let y = 0; y < nh; y++) {
+    const v = (y + 0.5) / nh;
+    for (let x = 0; x < nw; x++) {
+      out[y * nw + x] = Math.round(
+        sampleCoverage(src, (x + 0.5) / nw, v) * 255,
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Re-grid every brush component onto the frame's coverage grid. The GPU
+ * uploads all brush rasters into one texture array sized from a single
+ * grid, so "every raster matches the current frame's grid" is a hard
+ * invariant — a 90° rotation swaps the frame dims and would otherwise
+ * leave old brushes on a transposed grid (same byte count, so the upload
+ * silently scrambles). Returns the new masks array, or null when every
+ * raster already matches (the common case — angle-only geometry changes,
+ * repeated calls).
+ * @param {readonly MaskGroup[]} masks
+ * @param {number} frameW frame px
+ * @param {number} frameH
+ * @returns {MaskGroup[] | null}
+ */
+export function normalizeBrushGrids(masks, frameW, frameH) {
+  const { w, h } = brushCoverageDims(frameW, frameH);
+  let changed = false;
+  const next = masks.map((g) => {
+    let groupChanged = false;
+    const components = g.components.map((c) => {
+      if (
+        c.type !== "brush" ||
+        !c.coverage ||
+        !c.coverageW ||
+        !c.coverageH ||
+        (c.coverageW === w && c.coverageH === h)
+      ) {
+        return c;
+      }
+      groupChanged = true;
+      return {
+        ...c,
+        coverage: resampleCoverage(c.coverage, c.coverageW, c.coverageH, w, h),
+        coverageW: w,
+        coverageH: h,
+        coverageVersion: (c.coverageVersion ?? 0) + 1,
+      };
+    });
+    if (!groupChanged) return g;
+    changed = true;
+    return { ...g, components };
+  });
+  return changed ? next : null;
+}
+
+/**
+ * Group-model analog of effectiveMasks: disabled/bypassed groups keep
+ * their components (so list indices stay stable for the overlay) with
+ * adjustments zeroed, and the totals are held to the shader bounds —
+ * MASK.MAX groups, MASK.MAX_COMPONENTS components overall,
+ * MASK.MAX_BRUSH_COMPONENTS brush rasters overall. The UI enforces these
+ * caps at creation time; this is the pipeline's guarantee against
+ * over-budget persisted data.
+ * @template {{ masks: readonly MaskGroup[] }} S
  * @param {S} settings
- * @param {boolean} [bypassAll] section eye: treat every mask as disabled
+ * @param {boolean} [bypassAll] section eye: treat every group as disabled
  * @returns {S}
  */
-export function effectiveMasks(settings, bypassAll = false) {
-  const masks = settings.masks ?? [];
-  if (masks.length === 0) return settings;
+export function effectiveMaskGroups(settings, bypassAll = false) {
+  const groups = settings.masks ?? [];
+  if (groups.length === 0) return settings;
+  let comps = 0;
+  let brushes = 0;
   return {
     ...settings,
-    masks: masks
-      .slice(0, MASK.MAX)
-      .map((m) =>
-        m.enabled && !bypassAll
-          ? m
-          : { ...m, adjustments: { ...ZERO_MASK_ADJUSTMENTS } },
-      ),
+    masks: groups.slice(0, MASK.MAX).map((g) => {
+      /** @type {MaskComponent[]} */
+      const components = [];
+      for (const c of g.components) {
+        if (comps >= MASK.MAX_COMPONENTS) break;
+        if (c.type === "brush") {
+          if (brushes >= MASK.MAX_BRUSH_COMPONENTS) continue;
+          brushes += 1;
+        }
+        comps += 1;
+        components.push(c);
+      }
+      const active = g.enabled && !bypassAll;
+      if (active && components.length === g.components.length) return g;
+      return {
+        ...g,
+        components,
+        adjustments: active ? g.adjustments : { ...ZERO_MASK_ADJUSTMENTS },
+      };
+    }),
   };
 }

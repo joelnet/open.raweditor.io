@@ -9,7 +9,7 @@ import {
   INPUT_TRANSFER,
   LUMA,
 } from "./constants.js";
-import { prepareMask, maskWeight } from "./mask-math.js";
+import { prepareGroup, groupWeight } from "./mask-math.js";
 import {
   ZERO_GEOMETRY,
   isIdentityGeometry,
@@ -21,8 +21,9 @@ import {
  * Tone settings, all pre-scaled: exposure in EV (±5), grade hues in turns
  * [0, 1), grade sats and blending in [0, 1], the rest in [-1, +1]
  * except positive-only sharpening/grain controls in [0, 1].
- * `masks` are local adjustments (linear/radial gradients); treat the array
- * as immutable — always replace it, never mutate in place.
+ * `masks` are local adjustments — mask groups whose shape components
+ * composite into one weight per group; treat the array as immutable —
+ * always replace it, never mutate in place.
  * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
  *             lightBalance: number, highlights: number, shadows: number, whites: number,
  *             blacks: number, sharpening: number, texture: number,
@@ -47,7 +48,7 @@ import {
  *             invert: number, grainAmount: number, grainSize: number,
  *             grainMidtones: number, noise: number,
  *             lumaNoise: number, colorNoise: number, noiseDetail: number,
- *             masks: readonly import("./mask-math.js").Mask[]
+ *             masks: readonly import("./mask-math.js").MaskGroup[]
  *           }} ToneSettings
  */
 
@@ -881,7 +882,7 @@ export function toneMapRows(
   // masks at v_uv against u_frame).
   const masks = settings.masks?.length ? settings.masks : null;
   const prepared = masks
-    ? masks.map((mk) => prepareMask(mk, frame.width, frame.height))
+    ? masks.map((mk) => prepareGroup(mk, frame.width, frame.height))
     : null;
   const weights = masks ? new Float64Array(masks.length) : undefined;
 
@@ -961,7 +962,7 @@ export function toneMapRows(
       }
       if (prepared && weights) {
         for (let j = 0; j < prepared.length; j++) {
-          weights[j] = maskWeight(prepared[j], fx, fy);
+          weights[j] = groupWeight(prepared[j], fx, fy);
         }
       }
       let [or, og, ob] = applyTonePixel(r, g, b, settings, weights);

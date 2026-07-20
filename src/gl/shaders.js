@@ -130,18 +130,25 @@ uniform vec2 u_rot;             // cos, sin of the straighten angle
 uniform float u_coverScale;     // ≥ 1, keeps the frame free of blank corners
 uniform vec2 u_frame;           // frame size in px (oriented preview dims)
 
-// Local masks — geometry and adjustments mirror tone/mask-math.js.
-uniform int u_maskCount;
-uniform vec4 u_maskGeo[${MASK.MAX}];   // x, y (UV), angle (rad), type (0 linear, 1 radial, 2 brush)
-uniform vec4 u_maskParam[${MASK.MAX}]; // linear: range,-,-,invert | radial: rx, ry, feather, invert | brush: -, layer, -, invert
+// Local masks — groups of shape components (tone/mask-math.js). Each group
+// owns one adjustment set; its components composite into a single weight
+// per pixel (groupWeight()): screen-union of add components times a
+// (1 - w) soft-eraser factor per subtract, then the group invert, carried
+// in u_maskAdjC[i].w. Component geometry/params mirror maskWeight().
+uniform int u_maskCount;                          // groups
+uniform int u_compCount;                          // components, flat across groups
+uniform vec4 u_compGeo[${MASK.MAX_COMPONENTS}];   // x, y (UV), angle (rad), type (0 linear, 1 radial, 2 brush)
+uniform vec4 u_compParam[${MASK.MAX_COMPONENTS}]; // linear: range,-,-,invert | radial: rx, ry, feather, invert | brush: -, layer, -, invert
+uniform ivec2 u_compInfo[${MASK.MAX_COMPONENTS}]; // group index, subtract flag
 uniform vec4 u_maskAdjA[${MASK.MAX}];  // temp, tint, exposure, contrast
 uniform vec4 u_maskAdjB[${MASK.MAX}];  // highlights, shadows, whites, blacks
-uniform vec4 u_maskAdjC[${MASK.MAX}];  // vibrance, saturation, light balance, -
+uniform vec4 u_maskAdjC[${MASK.MAX}];  // vibrance, saturation, light balance, group invert
 uniform vec4 u_maskAdjD[${MASK.MAX}];  // sharpening, texture, clarity, dehaze
-uniform int u_maskOverlay;             // mask index to tint red, -1 = off
-// Brush (drawn) mask coverage: one R8 layer per brush-mask slot, LINEAR
-// filtered so the bilinear fetch matches sampleCoverage() in mask-math.js.
-// param.y of a brush mask selects the layer. Bound on texture unit 4.
+uniform int u_maskOverlay;             // group index to tint red, -1 = off
+// Brush (drawn) component coverage: R8 layers assigned densely to brush
+// components in walk order (renderer flattenGroups()), LINEAR filtered so
+// the bilinear fetch matches sampleCoverage() in mask-math.js. param.y of
+// a brush component selects the layer. Bound on texture unit 4.
 uniform highp sampler2DArray u_brushMask;
 
 in vec2 v_uv;
@@ -386,9 +393,9 @@ vec3 colorNrBlend(vec3 rgb, vec2 cd, float amount) {
   return vec3(B + Co, G, B);
 }
 
-// Mask weight at one pixel — mirrors maskWeight() in mask-math.js.
-// Computed in pixel space so radial masks stay true ellipses on
-// non-square images.
+// One component's shape weight at one pixel — mirrors maskWeight() in
+// mask-math.js. Computed in pixel space so radial masks stay true
+// ellipses on non-square images.
 float maskWeight(vec2 uv, vec2 size, vec4 geo, vec4 param) {
   float m;
   if (geo.w > 1.5) {
@@ -548,6 +555,27 @@ void main() {
   ivec2 p = clamp(ivec2(suv * vec2(ts)), ivec2(0), ts - 1);
   vec3 rgb = decodeInput(vec3(texelFetch(u_image, p, 0).rgb) / 65535.0);
 
+  // Composite group weights, computed once for the presence loop, the tone
+  // loop, and the overlay — mirrors groupWeight() in mask-math.js:
+  //   A = 1 − Π over adds (1 − w),  W = A · Π over subtracts (1 − w),
+  // then the group invert (u_maskAdjC[i].w).
+  float gw[${MASK.MAX}];
+  {
+    float addP[${MASK.MAX}];
+    float subP[${MASK.MAX}];
+    for (int i = 0; i < ${MASK.MAX}; i++) { addP[i] = 1.0; subP[i] = 1.0; }
+    for (int c = 0; c < ${MASK.MAX_COMPONENTS}; c++) {
+      if (c >= u_compCount) break;
+      float w = maskWeight(v_uv, u_frame, u_compGeo[c], u_compParam[c]);
+      if (u_compInfo[c].y == 1) subP[u_compInfo[c].x] *= 1.0 - w;
+      else addP[u_compInfo[c].x] *= 1.0 - w;
+    }
+    for (int i = 0; i < ${MASK.MAX}; i++) {
+      float w = (1.0 - addP[i]) * subP[i];
+      gw[i] = u_maskAdjC[i].w > 0.5 ? 1.0 - w : w;
+    }
+  }
+
   // 0. presence: color NR (chroma blend), then dehaze (linear RGB, where the
   // haze model holds), then sharpen and the luma NR/texture/clarity gamma-luma
   // delta applied as a hue-preserving linear ratio — mirrors
@@ -600,7 +628,7 @@ void main() {
     }
     for (int i = 0; i < ${MASK.MAX}; i++) {
       if (i >= u_maskCount) break;
-      float mw = maskWeight(v_uv, u_frame, u_maskGeo[i], u_maskParam[i]);
+      float mw = gw[i];
       if (mw > 0.0) {
         rgb = applyMaskPresence(rgb, ySrc, p, mw, u_maskAdjD[i]);
         float mlb = u_maskAdjC[i].z * mw;
@@ -655,11 +683,11 @@ void main() {
   float mH = smoothstep(${f(TONE.HIGHLIGHT_MASK[0])}, ${f(TONE.HIGHLIGHT_MASK[1])}, ye);
   rgb *= exp2(${f(TONE.SH_STRENGTH_EV)} * (u_shadows * mS + u_highlights * mH));
 
-  // 5.5 local masks: each mask's own adjustment set, applied through its
-  // per-pixel weight (locals stack on the globals)
+  // 5.5 local masks: each group's own adjustment set, applied through its
+  // per-pixel composite weight (locals stack on the globals)
   for (int i = 0; i < ${MASK.MAX}; i++) {
     if (i >= u_maskCount) break;
-    float mw = maskWeight(v_uv, u_frame, u_maskGeo[i], u_maskParam[i]);
+    float mw = gw[i];
     if (mw > 0.0) {
       rgb = applyMaskAdjust(rgb, mw, u_maskAdjA[i], u_maskAdjB[i], u_maskAdjC[i]);
     }
@@ -758,12 +786,10 @@ void main() {
   // preview and the export agree at any resolution.
   display = applyDisplayEffects(display, v_uv, u_frame.x, u_frame.y);
 
-  // mask visualization: tint the selected mask's coverage red
+  // mask visualization: tint the selected group's composite coverage red
   // (preview-only — the CPU export has no counterpart on purpose)
   if (u_maskOverlay >= 0 && u_maskOverlay < u_maskCount) {
-    float ov = maskWeight(v_uv, u_frame,
-      u_maskGeo[u_maskOverlay], u_maskParam[u_maskOverlay]);
-    display = mix(display, vec3(0.86, 0.15, 0.15), ov * 0.55);
+    display = mix(display, vec3(0.86, 0.15, 0.15), gw[u_maskOverlay] * 0.55);
   }
 
   outColor = vec4(display, 1.0);

@@ -163,6 +163,19 @@ export const SPATIAL = {
 export const MASK = {
   /** Uniform-array bound shared by the shader and the renderer. */
   MAX: 8,
+  /**
+   * Flat cap on shape components across all mask groups — the shader's
+   * component uniform-array bound. Real-world compound masks are a base
+   * shape plus one to three subtracts, so 16 leaves headroom without
+   * bloating the uniform budget.
+   */
+  MAX_COMPONENTS: 16,
+  /**
+   * Brush components across all groups — the R8 coverage texture-array
+   * layer budget. Layers are assigned densely to actual brush components,
+   * not pre-allocated per slot.
+   */
+  MAX_BRUSH_COMPONENTS: 8,
   /** Default linear falloff half-width, as a fraction of the diagonal. */
   LINEAR_RANGE: 0.1,
   /** Default radial feather (default of 50). */

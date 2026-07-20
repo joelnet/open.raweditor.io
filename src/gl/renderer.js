@@ -136,8 +136,10 @@ export function createRenderer(canvas) {
   const locCoverScale = gl.getUniformLocation(program, "u_coverScale");
   const locFrame = gl.getUniformLocation(program, "u_frame");
   const locMaskCount = gl.getUniformLocation(program, "u_maskCount");
-  const locMaskGeo = gl.getUniformLocation(program, "u_maskGeo");
-  const locMaskParam = gl.getUniformLocation(program, "u_maskParam");
+  const locCompCount = gl.getUniformLocation(program, "u_compCount");
+  const locCompGeo = gl.getUniformLocation(program, "u_compGeo");
+  const locCompParam = gl.getUniformLocation(program, "u_compParam");
+  const locCompInfo = gl.getUniformLocation(program, "u_compInfo");
   const locMaskAdjA = gl.getUniformLocation(program, "u_maskAdjA");
   const locMaskAdjB = gl.getUniformLocation(program, "u_maskAdjB");
   const locMaskAdjC = gl.getUniformLocation(program, "u_maskAdjC");
@@ -161,20 +163,57 @@ export function createRenderer(canvas) {
   // across draws.
   const hslVals = new Float32Array(HSL_BAND_KEYS.length * 3);
 
-  // Packed mask uniform staging, reused across draws.
-  const maskGeo = new Float32Array(MASK.MAX * 4);
-  const maskParam = new Float32Array(MASK.MAX * 4);
+  // Packed mask uniform staging, reused across draws: per-component
+  // geometry/params plus per-group adjustments (adjC.w carries the group
+  // invert flag).
+  const compGeo = new Float32Array(MASK.MAX_COMPONENTS * 4);
+  const compParam = new Float32Array(MASK.MAX_COMPONENTS * 4);
+  const compInfo = new Int32Array(MASK.MAX_COMPONENTS * 2);
   const maskAdjA = new Float32Array(MASK.MAX * 4);
   const maskAdjB = new Float32Array(MASK.MAX * 4);
   const maskAdjC = new Float32Array(MASK.MAX * 4);
   const maskAdjD = new Float32Array(MASK.MAX * 4);
 
-  // Brush (drawn) mask coverage lives in an R8 TEXTURE_2D_ARRAY on unit 4
-  // (one layer per mask slot), LINEAR filtered so the GPU's bilinear fetch
-  // matches sampleCoverage() in mask-math.js. The array is (re)allocated
-  // when the coverage grid dims change; individual layers re-upload only
-  // when their coverageVersion changes (so active painting touches one
-  // layer, not the whole array). Layer index = the mask's array index.
+  /**
+   * Flatten mask groups into the shader's component list, applying the
+   * shader bounds and assigning brush texture-array layers densely in walk
+   * order. Shared by setUniforms and syncBrushMasks so uniform packing and
+   * layer uploads can never disagree.
+   * @param {readonly import("../tone/mask-math.js").MaskGroup[]} groups
+   * @returns {{ comps: { c: import("../tone/mask-math.js").MaskComponent,
+   *                      group: number, layer: number }[],
+   *             groupCount: number }}
+   */
+  const flattenGroups = (groups) => {
+    /** @type {{ c: import("../tone/mask-math.js").MaskComponent,
+     *           group: number, layer: number }[]} */
+    const comps = [];
+    const groupCount = Math.min(groups.length, MASK.MAX);
+    let brushes = 0;
+    for (let gi = 0; gi < groupCount; gi++) {
+      for (const c of groups[gi].components) {
+        if (comps.length >= MASK.MAX_COMPONENTS) break;
+        let layer = -1;
+        if (c.type === "brush") {
+          if (brushes >= MASK.MAX_BRUSH_COMPONENTS) continue;
+          layer = brushes;
+          brushes += 1;
+        }
+        comps.push({ c, group: gi, layer });
+      }
+    }
+    return { comps, groupCount };
+  };
+
+  // Brush (drawn) component coverage lives in an R8 TEXTURE_2D_ARRAY on
+  // unit 4, LINEAR filtered so the GPU's bilinear fetch matches
+  // sampleCoverage() in mask-math.js. Layers are assigned densely to brush
+  // components in flattenGroups() walk order — identity is the component's
+  // stable id, so adding or removing shapes never leaves a layer serving a
+  // stale raster. The array is (re)allocated when the coverage grid dims
+  // change; individual layers re-upload only when their component id or
+  // coverageVersion changes (so active painting touches one layer, not the
+  // whole array).
   const brushTex = gl.createTexture();
   gl.activeTexture(gl.TEXTURE4);
   gl.bindTexture(gl.TEXTURE_2D_ARRAY, brushTex);
@@ -202,39 +241,41 @@ export function createRenderer(canvas) {
   let brushW = 0; // allocated grid dims of the array (0 = unallocated)
   let brushH = 0;
   /** Last-uploaded coverageVersion per layer; -1 forces a (re)upload. */
-  const brushVersions = new Int32Array(MASK.MAX).fill(-1);
+  const brushVersions = new Int32Array(MASK.MAX_BRUSH_COMPONENTS).fill(-1);
+  /** Component id each layer was last uploaded for. */
+  const brushLayerIds = new Array(MASK.MAX_BRUSH_COMPONENTS).fill("");
 
   /**
-   * Ensure the coverage array is allocated at (w, h) and the given masks'
-   * brush layers are current. Cheap when nothing changed. Uploads use
+   * Ensure the coverage array is allocated at (w, h) and every brush
+   * component's layer is current. Cheap when nothing changed. Uploads use
    * UNPACK_ALIGNMENT 1 since R8 rows aren't 4-byte aligned.
-   * @param {readonly import("../tone/mask-math.js").Mask[]} masks
+   * @param {ReturnType<typeof flattenGroups>["comps"]} comps
    */
-  const syncBrushMasks = (masks) => {
-    // Find the coverage grid dims from the first brush mask (all brush
-    // masks on one frame share dims — they're sized from the same frame).
+  const syncBrushMasks = (comps) => {
+    // Find the coverage grid dims from the first brush component (all
+    // brushes on one frame share dims — they're sized from the same frame).
     let cw = 0;
     let ch = 0;
-    for (const m of masks) {
-      if (m.type === "brush" && m.coverageW && m.coverageH) {
-        cw = m.coverageW;
-        ch = m.coverageH;
+    for (const { c } of comps) {
+      if (c.type === "brush" && c.coverageW && c.coverageH) {
+        cw = c.coverageW;
+        ch = c.coverageH;
         break;
       }
     }
-    if (cw === 0) return; // no brush masks → nothing to upload
+    if (cw === 0) return; // no brush components → nothing to upload
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, brushTex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     if (cw !== brushW || ch !== brushH) {
-      // (Re)allocate: MASK.MAX layers so any slot can hold a brush.
+      // (Re)allocate the full layer budget once per grid size.
       gl.texImage3D(
         gl.TEXTURE_2D_ARRAY,
         0,
         gl.R8,
         cw,
         ch,
-        MASK.MAX,
+        MASK.MAX_BRUSH_COMPONENTS,
         0,
         gl.RED,
         gl.UNSIGNED_BYTE,
@@ -243,26 +284,33 @@ export function createRenderer(canvas) {
       brushW = cw;
       brushH = ch;
       brushVersions.fill(-1); // every layer is now stale
+      brushLayerIds.fill("");
     }
-    const count = Math.min(masks.length, MASK.MAX);
-    for (let i = 0; i < count; i++) {
-      const m = masks[i];
-      const ver = m.type === "brush" ? (m.coverageVersion ?? 0) : -1;
-      if (m.type === "brush" && m.coverage && brushVersions[i] !== ver) {
+    for (const { c, layer } of comps) {
+      if (layer < 0 || !c.coverage) continue;
+      // The UI keeps every raster on the frame grid (normalizeBrushGrids);
+      // if corrupted data slips through anyway, skip the upload — a
+      // transposed raster has the same byte count and would silently
+      // scramble the layer. The layer stays zero (WebGL zero-initializes),
+      // so the component reads as empty rather than garbage.
+      if (c.coverageW !== cw || c.coverageH !== ch) continue;
+      const ver = c.coverageVersion ?? 0;
+      if (brushLayerIds[layer] !== c.id || brushVersions[layer] !== ver) {
         gl.texSubImage3D(
           gl.TEXTURE_2D_ARRAY,
           0,
           0,
           0,
-          i,
+          layer,
           cw,
           ch,
           1,
           gl.RED,
           gl.UNSIGNED_BYTE,
-          m.coverage,
+          c.coverage,
         );
-        brushVersions[i] = ver;
+        brushLayerIds[layer] = c.id;
+        brushVersions[layer] = ver;
       }
     }
     gl.activeTexture(gl.TEXTURE0);
@@ -302,25 +350,12 @@ export function createRenderer(canvas) {
     );
     gl.uniform2f(locFrame, frame.width, frame.height);
 
-    const masks = settings.masks ?? [];
-    const count = Math.min(masks.length, MASK.MAX);
-    for (let i = 0; i < count; i++) {
-      const mk = masks[i];
-      const a = mk.adjustments;
-      const o = i * 4;
-      const linear = mk.type === "linear";
-      const brush = mk.type === "brush";
-      maskGeo[o] = mk.x;
-      maskGeo[o + 1] = mk.y;
-      maskGeo[o + 2] = mk.angle;
-      // type encoding: 0 linear, 1 radial, 2 brush
-      maskGeo[o + 3] = brush ? 2 : linear ? 0 : 1;
-      // brush slot carries the array layer index in param.y; the analytic
-      // params are unused for brushes
-      maskParam[o] = brush ? 0 : linear ? mk.range : mk.radiusX;
-      maskParam[o + 1] = brush ? i : linear ? 0 : mk.radiusY;
-      maskParam[o + 2] = brush || linear ? 0 : mk.feather;
-      maskParam[o + 3] = mk.invert ? 1 : 0;
+    const groups = settings.masks ?? [];
+    const { comps, groupCount } = flattenGroups(groups);
+    for (let gi = 0; gi < groupCount; gi++) {
+      const g = groups[gi];
+      const a = g.adjustments;
+      const o = gi * 4;
       maskAdjA[o] = a.temp;
       maskAdjA[o + 1] = a.tint;
       maskAdjA[o + 2] = a.exposure;
@@ -332,23 +367,44 @@ export function createRenderer(canvas) {
       maskAdjC[o] = a.vibrance;
       maskAdjC[o + 1] = a.saturation;
       maskAdjC[o + 2] = a.lightBalance ?? 0;
-      maskAdjC[o + 3] = 0;
+      maskAdjC[o + 3] = g.invert ? 1 : 0;
       maskAdjD[o] = a.sharpening ?? 0;
       maskAdjD[o + 1] = a.texture ?? 0;
       maskAdjD[o + 2] = a.clarity ?? 0;
       maskAdjD[o + 3] = a.dehaze ?? 0;
     }
-    gl.uniform1i(locMaskCount, count);
-    gl.uniform4fv(locMaskGeo, maskGeo);
-    gl.uniform4fv(locMaskParam, maskParam);
+    for (let ci = 0; ci < comps.length; ci++) {
+      const { c: mk, group, layer } = comps[ci];
+      const o = ci * 4;
+      const linear = mk.type === "linear";
+      const brush = mk.type === "brush";
+      compGeo[o] = mk.x;
+      compGeo[o + 1] = mk.y;
+      compGeo[o + 2] = mk.angle;
+      // type encoding: 0 linear, 1 radial, 2 brush
+      compGeo[o + 3] = brush ? 2 : linear ? 0 : 1;
+      // brush slot carries the array layer index in param.y; the analytic
+      // params are unused for brushes
+      compParam[o] = brush ? 0 : linear ? mk.range : mk.radiusX;
+      compParam[o + 1] = brush ? layer : linear ? 0 : mk.radiusY;
+      compParam[o + 2] = brush || linear ? 0 : mk.feather;
+      compParam[o + 3] = mk.invert ? 1 : 0;
+      compInfo[ci * 2] = group;
+      compInfo[ci * 2 + 1] = mk.mode === "subtract" ? 1 : 0;
+    }
+    gl.uniform1i(locMaskCount, groupCount);
+    gl.uniform1i(locCompCount, comps.length);
+    gl.uniform4fv(locCompGeo, compGeo);
+    gl.uniform4fv(locCompParam, compParam);
+    gl.uniform2iv(locCompInfo, compInfo);
     gl.uniform4fv(locMaskAdjA, maskAdjA);
     gl.uniform4fv(locMaskAdjB, maskAdjB);
     gl.uniform4fv(locMaskAdjC, maskAdjC);
     gl.uniform4fv(locMaskAdjD, maskAdjD);
-    gl.uniform1i(locMaskOverlay, maskOverlay < count ? maskOverlay : -1);
+    gl.uniform1i(locMaskOverlay, maskOverlay < groupCount ? maskOverlay : -1);
     // bring the brush coverage array up to date (uploads only changed
-    // layers; no-op when there are no brush masks)
-    syncBrushMasks(masks);
+    // layers; no-op when there are no brush components)
+    syncBrushMasks(comps);
   };
 
   /** @param {number} unit */

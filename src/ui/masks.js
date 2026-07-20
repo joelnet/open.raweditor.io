@@ -1,17 +1,24 @@
-// Local adjustment masks (linear/radial gradients): a
-// MASKS sidebar section that owns the `masks` array in the store, plus a
-// viewport SVG overlay for editing the selected mask's geometry — drag the
-// pin to move, the axis handles to resize (radial) or the boundary lines
-// to widen the falloff (linear), and the lollipop handle to rotate.
+// Local adjustment masks: a MASKS sidebar section that owns the `masks`
+// array in the store (mask groups — one adjustment set applied through the
+// composite of the group's add/subtract shape components), plus a viewport
+// SVG overlay for editing the selected shape's geometry — drag the pin to
+// move, the axis handles to resize (radial) or the boundary lines to widen
+// the falloff (linear), and the lollipop handle to rotate. The selected
+// group expands into a component list: +/− badges toggle each shape's
+// mode, "+ Add" / "− Subtract" swap to an inline Linear/Radial/Brush chip
+// chooser, and unselected shapes render as dimmed tappable pins on the
+// canvas (subtract shapes stroke red, matching the erase-cursor color).
 
 import { MASK } from "../tone/constants.js";
 import {
-  createLinearMask,
-  createRadialMask,
-  createBrushMask,
+  createLinearComponent,
+  createRadialComponent,
+  createBrushComponent,
+  createMaskGroup,
   brushCoverageDims,
   stampBrush,
-  effectiveMasks,
+  effectiveMaskGroups,
+  normalizeBrushGrids,
 } from "../tone/mask-math.js";
 import { EYE_OPEN, EYE_CLOSED } from "./panel.js";
 import { onDoubleTap } from "./double-tap.js";
@@ -213,10 +220,15 @@ function svgEl(tag, attrs) {
  *   need a re-render but don't touch the store
  */
 export function initMasks(viewport, canvas, panelContainer, store, handlers) {
-  /** @type {readonly import("../tone/mask-math.js").Mask[]} */
+  /** @type {readonly import("../tone/mask-math.js").MaskGroup[]} */
   let masks = [];
-  let selected = -1;
-  let showMask = false;
+  let selected = -1; // group index
+  let selectedComp = 0; // component index within the selected group
+  /** Open inline shape chooser for "+ Add" / "− Subtract", or null. */
+  let chooserMode = /** @type {"add" | "subtract" | null} */ (null);
+  // Show Mask defaults ON: selecting a mask immediately shows its red
+  // composite coverage (toggle off from the group tools).
+  let showMask = true;
   let bypassed = false;
   let enabled = false;
   let cropActive = false;
@@ -234,34 +246,88 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   let brushFlow = MASK.BRUSH_FLOW;
   let brushErase = false;
 
-  /** @param {readonly import("../tone/mask-math.js").Mask[]} next */
+  function selectedGroup() {
+    return selected >= 0 && selected < masks.length ? masks[selected] : null;
+  }
+
+  /** The component whose geometry/raster is being edited on the canvas. */
+  function selectedShape() {
+    return selectedGroup()?.components[selectedComp];
+  }
+
+  /** Flat component count across all groups (shader budget). */
+  function totalComponents() {
+    return masks.reduce((n, g) => n + g.components.length, 0);
+  }
+
+  /** Brush components across all groups (texture-array layer budget). */
+  function totalBrushComponents() {
+    return masks.reduce(
+      (n, g) => n + g.components.filter((c) => c.type === "brush").length,
+      0,
+    );
+  }
+
+  /** @param {readonly import("../tone/mask-math.js").MaskGroup[]} next */
   function commit(next) {
     store.set({ masks: next });
   }
 
   /**
-   * Coverage of a brush mask was painted in place: bump its version and
-   * commit a shallow-copied mask so the store notifies (renderer re-uploads
-   * the one changed layer, export sees the live raster). The Uint8Array
-   * reference is kept stable — we mutate it, never reallocate per stroke, so
-   * a drag stays allocation-free (side-buffer-style efficiency while the
-   * raster still lives on the store mask for free structured-clone export).
-   * @param {number} index
+   * Coverage of the selected brush component was painted in place: bump its
+   * version and commit shallow-copied wrappers so the store notifies
+   * (renderer re-uploads the one changed layer, export sees the live
+   * raster). The Uint8Array reference is kept stable — we mutate it, never
+   * reallocate per stroke, so a drag stays allocation-free
+   * (side-buffer-style efficiency while the raster still lives on the
+   * store mask for free structured-clone export).
+   * @param {number} index group index
    */
   function commitCoverage(index) {
+    const comp = selectedComp;
     commit(
-      masks.map((m, i) =>
+      masks.map((g, i) =>
         i === index
-          ? { ...m, coverageVersion: (m.coverageVersion ?? 0) + 1 }
-          : m,
+          ? {
+              ...g,
+              components: g.components.map((c, ci) =>
+                ci === comp
+                  ? { ...c, coverageVersion: (c.coverageVersion ?? 0) + 1 }
+                  : c,
+              ),
+            }
+          : g,
       ),
     );
   }
 
-  /** @param {Partial<import("../tone/mask-math.js").Mask>} patch */
+  /**
+   * Patch the selected group (enabled / invert / adjustments).
+   * @param {Partial<import("../tone/mask-math.js").MaskGroup>} patch
+   */
   function patchSelected(patch) {
     if (selected < 0 || selected >= masks.length) return;
-    commit(masks.map((m, i) => (i === selected ? { ...m, ...patch } : m)));
+    commit(masks.map((g, i) => (i === selected ? { ...g, ...patch } : g)));
+  }
+
+  /**
+   * Patch the selected component (geometry / coverage / mode / invert).
+   * @param {Partial<import("../tone/mask-math.js").MaskComponent>} patch
+   */
+  function patchSelectedShape(patch) {
+    if (selected < 0 || selected >= masks.length) return;
+    commit(
+      masks.map((g, i) =>
+        i === selected
+          ? {
+              ...g,
+              components: g.components.map((c, ci) =>
+                ci === selectedComp ? { ...c, ...patch } : c,
+              ),
+            }
+          : g,
+      ),
+    );
   }
 
   // --- sidebar section ---
@@ -304,44 +370,146 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   section.append(header, addRow, list, detail);
   panelContainer.append(section);
 
-  /** @param {"linear" | "radial" | "brush"} type */
-  function addMask(type) {
-    if (!enabled || masks.length >= MASK.MAX) return;
-    // create at the center of the current view so it's visible when zoomed
+  /** Shape budgets left? The UI disables creation at the caps so the
+   * pipeline's effectiveMaskGroups truncation never silently kicks in. */
+  function componentBudgetFull() {
+    return totalComponents() >= MASK.MAX_COMPONENTS;
+  }
+  function brushBudgetFull() {
+    return totalBrushComponents() >= MASK.MAX_BRUSH_COMPONENTS;
+  }
+
+  /**
+   * A new shape component at the center of the current view (so it's
+   * visible when zoomed).
+   * @param {"linear" | "radial" | "brush"} type
+   * @param {"add" | "subtract"} [mode]
+   */
+  function makeComponent(type, mode = "add") {
     const v = handlers.getView();
     const cx = v.x + v.w / 2;
     const cy = v.y + v.h / 2;
-    /** @type {import("../tone/mask-math.js").Mask} */
-    let mask;
     if (type === "brush") {
       const dims = brushCoverageDims(imgW, imgH);
-      mask = createBrushMask(dims.w, dims.h);
-      // a brush has no analytic geometry to drag — you paint it on the
-      // canvas. Turn the red coverage overlay on so strokes are visible as
-      // they're laid down (the mask shows while you brush).
-      showMask = true;
-    } else {
-      mask =
-        type === "linear" ? createLinearMask(cx, cy) : createRadialMask(cx, cy);
+      return createBrushComponent(dims.w, dims.h, mode);
     }
+    return type === "linear"
+      ? createLinearComponent(cx, cy, mode)
+      : createRadialComponent(cx, cy, mode);
+  }
+
+  /** @param {"linear" | "radial" | "brush"} type */
+  function addMask(type) {
+    if (!enabled || masks.length >= MASK.MAX) return;
+    if (componentBudgetFull() || (type === "brush" && brushBudgetFull()))
+      return;
+    const component = makeComponent(type);
+    // a brush has no analytic geometry to drag — you paint it on the
+    // canvas. Turn the red coverage overlay on so strokes are visible as
+    // they're laid down (the mask shows while you brush).
+    if (type === "brush") showMask = true;
     selected = masks.length;
-    commit([...masks, mask]);
+    selectedComp = 0;
+    chooserMode = null;
+    commit([...masks, createMaskGroup(component)]);
   }
   addLinearBtn.addEventListener("click", () => addMask("linear"));
   addRadialBtn.addEventListener("click", () => addMask("radial"));
   addBrushBtn.addEventListener("click", () => addMask("brush"));
 
+  /**
+   * Append a component to the selected group and select it. The composite
+   * overlay turns on so the new shape's effect on the mask is visible
+   * immediately — watching the red tint react is the feedback loop for
+   * subtraction.
+   * @param {"linear" | "radial" | "brush"} type
+   * @param {"add" | "subtract"} mode
+   */
+  function addComponent(type, mode) {
+    const g = selectedGroup();
+    if (!g || !enabled || bypassed) return;
+    if (componentBudgetFull() || (type === "brush" && brushBudgetFull()))
+      return;
+    const component = makeComponent(type, mode);
+    selectedComp = g.components.length;
+    chooserMode = null;
+    showMask = true;
+    commit(
+      masks.map((gr, i) =>
+        i === selected
+          ? { ...gr, components: [...gr.components, component] }
+          : gr,
+      ),
+    );
+  }
+
+  /** Flip one of the selected group's components between add and subtract.
+   * @param {number} ci */
+  function toggleComponentMode(ci) {
+    const g = selectedGroup();
+    const c = g?.components[ci];
+    if (!c) return;
+    showMask = true; // seeing the composite react is the point
+    commit(
+      masks.map((gr, i) =>
+        i === selected
+          ? {
+              ...gr,
+              components: gr.components.map((cc, j) =>
+                j === ci
+                  ? { ...cc, mode: cc.mode === "add" ? "subtract" : "add" }
+                  : cc,
+              ),
+            }
+          : gr,
+      ),
+    );
+  }
+
+  /** Delete the whole selected mask (group). */
+  function deleteGroup() {
+    if (selected < 0) return;
+    const next = masks.filter((_, i) => i !== selected);
+    selected = Math.min(selected, next.length - 1);
+    selectedComp = 0;
+    chooserMode = null;
+    commit(next);
+  }
+
+  /** Delete the selected component; deleting the last one deletes the
+   * mask — a shapeless group would render nothing. */
+  function deleteComponent() {
+    const g = selectedGroup();
+    if (!g) return;
+    if (g.components.length <= 1) {
+      deleteGroup();
+      return;
+    }
+    const comp = selectedComp;
+    selectedComp = Math.min(comp, g.components.length - 2);
+    commit(
+      masks.map((gr, i) =>
+        i === selected
+          ? { ...gr, components: gr.components.filter((_, ci) => ci !== comp) }
+          : gr,
+      ),
+    );
+  }
+
   // --- selected-mask detail: tools + feather + adjustment sliders ---
 
+  // Group-scoped tools: invert flips the final composite; delete removes
+  // the whole mask. Labeled "… Mask" to stay distinct from the
+  // component-scoped row below them.
   const tools = el("div", "mask-tools");
   const invertBtn = /** @type {HTMLButtonElement} */ (
-    el("button", "", "Invert")
+    el("button", "", "Invert Mask")
   );
   const showBtn = /** @type {HTMLButtonElement} */ (
     el("button", "", "Show Mask")
   );
   const deleteBtn = /** @type {HTMLButtonElement} */ (
-    el("button", "", "Delete")
+    el("button", "", "Delete Mask")
   );
   invertBtn.type = "button";
   showBtn.type = "button";
@@ -358,23 +526,49 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     showBtn.setAttribute("aria-pressed", String(showMask));
     handlers.onUiChange();
   });
-  deleteBtn.addEventListener("click", () => {
-    if (selected < 0) return;
-    const next = masks.filter((_, i) => i !== selected);
-    selected = Math.min(selected, next.length - 1);
-    commit(next);
-  });
+  deleteBtn.addEventListener("click", deleteGroup);
   tools.append(invertBtn, showBtn, deleteBtn);
 
+  // Component-scoped tools for the selected shape: Subtract is a toggle
+  // (same state as the list badge), Invert flips only this shape's weight
+  // (subtract + invert ≡ intersect), Delete removes the shape.
+  const compTools = el("div", "mask-tools mask-comp-tools");
+  const compSubtractBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Subtract")
+  );
+  const compInvertBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Invert")
+  );
+  const compDeleteBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "Delete")
+  );
+  compSubtractBtn.type = "button";
+  compInvertBtn.type = "button";
+  compDeleteBtn.type = "button";
+  compSubtractBtn.setAttribute("aria-pressed", "false");
+  compInvertBtn.setAttribute("aria-pressed", "false");
+  compSubtractBtn.setAttribute("aria-label", "Toggle shape subtract mode");
+  compInvertBtn.setAttribute("aria-label", "Invert shape");
+  compDeleteBtn.setAttribute("aria-label", "Delete shape");
+  compSubtractBtn.addEventListener("click", () =>
+    toggleComponentMode(selectedComp),
+  );
+  compInvertBtn.addEventListener("click", () => {
+    const c = selectedShape();
+    if (c) patchSelectedShape({ invert: !c.invert });
+  });
+  compDeleteBtn.addEventListener("click", deleteComponent);
+  compTools.append(compSubtractBtn, compInvertBtn, compDeleteBtn);
+
   /** @type {{ row: HTMLElement, input: HTMLInputElement, value: HTMLElement,
-   *           read: (m: import("../tone/mask-math.js").Mask) => number,
+   *           read: (g: import("../tone/mask-math.js").MaskGroup) => number,
    *           scale: number, decimals: number, signed: boolean }[]} */
   const sliderRows = [];
 
   /**
    * @param {{ label: string, min: number, max: number, step: number,
    *           scale: number, decimals: number, signed?: boolean }} def
-   * @param {(m: import("../tone/mask-math.js").Mask) => number} read
+   * @param {(g: import("../tone/mask-math.js").MaskGroup) => number} read
    * @param {(raw: number) => void} write store-bound, takes the raw value
    * @param {number} [reset]
    */
@@ -414,8 +608,8 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       decimals: 0,
       signed: false,
     },
-    (m) => m.feather,
-    (raw) => patchSelected({ feather: raw * 0.01 }),
+    () => selectedShape()?.feather ?? 0,
+    (raw) => patchSelectedShape({ feather: raw * 0.01 }),
     MASK.RADIAL_FEATHER * 100,
   );
 
@@ -466,9 +660,9 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     refreshBrushCursor();
   });
   clearBtn.addEventListener("click", () => {
-    const m = masks[selected];
-    if (!m || m.type !== "brush" || !m.coverage) return;
-    m.coverage.fill(0);
+    const c = selectedShape();
+    if (!c || c.type !== "brush" || !c.coverage) return;
+    c.coverage.fill(0);
     commitCoverage(selected);
   });
   brushTools.append(addEraseBtn, clearBtn);
@@ -502,8 +696,8 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   brushControls.append(brushTools, sizeRow.row, hardnessRow.row, flowRow.row);
 
   function syncBrushUi() {
-    const m = masks[selected];
-    const isBrush = !!m && m.type === "brush";
+    const c = selectedShape();
+    const isBrush = !!c && c.type === "brush";
     brushControls.hidden = !isBrush;
     if (!isBrush) return;
     const off = !enabled || bypassed;
@@ -511,7 +705,10 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     clearBtn.disabled = off;
     addEraseBtn.classList.toggle("active", brushErase);
     addEraseBtn.setAttribute("aria-pressed", String(brushErase));
-    addEraseBtn.textContent = brushErase ? "Erase" : "Add";
+    // "Paint" / "Erase strokes", not "Add" / "Erase": the eraser edits this
+    // shape's raster, which is a different thing from a − Subtract shape
+    // cutting into the whole mask.
+    addEraseBtn.textContent = brushErase ? "Erase strokes" : "Paint";
     sizeRow.sync();
     hardnessRow.sync();
     flowRow.sync();
@@ -520,7 +717,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   // a clear separator between the shape/brush tools above (size, hardness,
   // flow, feather) and the adjustment sliders (temp, exposure, …) below
   const adjDivider = el("div", "mask-divider");
-  detail.append(tools, brushControls, featherRow, adjDivider);
+  detail.append(tools, compTools, brushControls, featherRow, adjDivider);
   for (
     let groupIndex = 0;
     groupIndex < ADJ_SLIDER_GROUPS.length;
@@ -618,26 +815,31 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   /** The SVG geometry overlay shows for linear/radial only (brush has no
    * parametric handles — it's painted on the canvas). */
   function overlayVisible() {
-    const m = masks[selected];
-    return selectionActive() && !!m && m.type !== "brush";
+    const c = selectedShape();
+    return selectionActive() && !!c && c.type !== "brush";
   }
 
-  /** The transparent paint surface is live whenever a brush mask is the
-   * selected mask (selecting a brush *is* entering paint — no toggle). */
+  /** The transparent paint surface is live whenever a brush component is
+   * selected (selecting a brush *is* entering paint — no toggle). */
   function paintActive() {
-    const m = masks[selected];
-    return selectionActive() && !!m && m.type === "brush" && !bypassed;
+    const c = selectedShape();
+    return selectionActive() && !!c && c.type === "brush" && !bypassed;
   }
 
   function drawOverlay() {
-    // brush masks use the paint surface; the analytic SVG overlay is hidden
+    // brush components use the paint surface; the analytic SVG overlay is
+    // hidden while painting
     paint.hidden = !paintActive();
     if (paint.hidden) brushCursor.hidden = true;
     const visible = overlayVisible();
     overlay.hidden = !visible;
     svg.textContent = "";
     if (!visible || dispW === 0) return;
-    const m = masks[selected];
+    const m = selectedShape();
+    if (!m) return;
+    // subtract shapes stroke in the accent red (the erase-cursor color) so
+    // a cutting shape is distinguishable on-canvas at a glance
+    const sub = m.mode === "subtract" ? " subtract" : "";
     const [cx, cy] = uvToDisp(m.x, m.y);
     const deg = (m.angle * 180) / Math.PI;
     const s = dispScale();
@@ -649,14 +851,18 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       const a = m.radiusX * Math.min(imgW, imgH) * s;
       const b = m.radiusY * Math.min(imgW, imgH) * s;
       g.append(
-        svgEl("ellipse", { class: "mask-shape", rx: String(a), ry: String(b) }),
         svgEl("ellipse", {
-          class: "mask-shape inner",
+          class: "mask-shape" + sub,
+          rx: String(a),
+          ry: String(b),
+        }),
+        svgEl("ellipse", {
+          class: "mask-shape inner" + sub,
           rx: String(a * (1 - m.feather)),
           ry: String(b * (1 - m.feather)),
         }),
         svgEl("line", {
-          class: "mask-arm",
+          class: "mask-arm" + sub,
           y1: String(-b),
           y2: String(-b - ROTATE_ARM),
         }),
@@ -694,7 +900,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       ])) {
         g.append(
           svgEl("line", {
-            class: cls,
+            class: cls + sub,
             x1: String(x),
             x2: String(x),
             y1: String(-len),
@@ -715,7 +921,10 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
         }
       }
       g.append(
-        svgEl("line", { class: "mask-arm", x2: String(ROTATE_ARM * 1.5) }),
+        svgEl("line", {
+          class: "mask-arm" + sub,
+          x2: String(ROTATE_ARM * 1.5),
+        }),
         svgEl("circle", {
           class: "mask-handle",
           cx: String(ROTATE_ARM * 1.5),
@@ -732,6 +941,30 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
         "data-handle": "move",
       }),
     );
+
+    // The group's other analytic components render as dimmed, tappable
+    // pins — tapping one selects it and starts dragging it in the same
+    // gesture (brushes have no meaningful anchor, so they're selected from
+    // the list). Pins go in *under* the selected shape's handles: when
+    // pins overlap (e.g. two shapes created at the view center), the shape
+    // being edited keeps drag priority instead of a tap toggling the
+    // selection back and forth.
+    const group = selectedGroup();
+    if (group) {
+      group.components.forEach((c, ci) => {
+        if (ci === selectedComp || c.type === "brush") return;
+        const [px, py] = uvToDisp(c.x, c.y);
+        svg.append(
+          svgEl("circle", {
+            class: "mask-pin dim" + (c.mode === "subtract" ? " subtract" : ""),
+            cx: String(px),
+            cy: String(py),
+            r: "6",
+            "data-comp": String(ci),
+          }),
+        );
+      });
+    }
     svg.append(g);
   }
 
@@ -767,10 +1000,39 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
 
   overlay.addEventListener("pointerdown", (e) => {
     if (drag || !overlayVisible()) return;
-    const handle = /** @type {SVGElement} */ (e.target).dataset?.handle;
+    const target = /** @type {SVGElement} */ (e.target);
+    // dimmed pin of another component: select it and start dragging it in
+    // the same gesture — a bare select-only tap would leave overlapping
+    // pins ping-ponging the selection with no way to drag either shape
+    const comp = target.dataset?.comp;
+    if (comp !== undefined) {
+      e.preventDefault();
+      selectedComp = Number(comp);
+      chooserMode = null;
+      syncUi();
+      drawOverlay();
+      handlers.onUiChange();
+      const m = selectedShape();
+      if (m && m.type !== "brush") {
+        const [px, py] = localPoint(e);
+        const [mx, my] = uvToDisp(m.x, m.y);
+        drag = {
+          id: e.pointerId,
+          handle: "move",
+          grabX: px - mx,
+          grabY: py - my,
+        };
+        window.addEventListener("pointermove", onDragMove);
+        window.addEventListener("pointerup", onDragEnd);
+        window.addEventListener("pointercancel", onDragEnd);
+      }
+      return;
+    }
+    const handle = target.dataset?.handle;
     if (!handle) return;
     e.preventDefault();
-    const m = masks[selected];
+    const m = selectedShape();
+    if (!m) return;
     const [px, py] = localPoint(e);
     const [mx, my] = uvToDisp(m.x, m.y);
     drag = {
@@ -787,7 +1049,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   /** @param {PointerEvent} e */
   function onDragMove(e) {
     if (!drag || e.pointerId !== drag.id) return;
-    const m = masks[selected];
+    const m = selectedShape();
     if (!m) return;
     const [px, py] = localPoint(e);
     const [cx, cy] = uvToDisp(m.x, m.y);
@@ -797,7 +1059,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     if (drag.handle === "move") {
       const [u, v] = dispToUv(px - drag.grabX, py - drag.grabY);
       // allow off-frame anchors but keep them grabbable
-      patchSelected({
+      patchSelectedShape({
         x: Math.min(Math.max(u, -0.5), 1.5),
         y: Math.min(Math.max(v, -0.5), 1.5),
       });
@@ -807,10 +1069,10 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
         m.type === "linear"
           ? Math.atan2(dy, dx)
           : Math.atan2(dy, dx) + Math.PI / 2;
-      patchSelected({ angle });
+      patchSelectedShape({ angle });
     } else if (drag.handle === "range") {
       const t = Math.abs(dx * Math.cos(m.angle) + dy * Math.sin(m.angle));
-      patchSelected({
+      patchSelectedShape({
         range: Math.max(t / s / Math.hypot(imgW, imgH), MIN_RANGE),
       });
     } else if (drag.handle === "rx" || drag.handle === "ry") {
@@ -822,7 +1084,9 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
         Math.abs(along) / s / Math.min(imgW, imgH),
         MIN_RADIUS,
       );
-      patchSelected(drag.handle === "rx" ? { radiusX: r } : { radiusY: r });
+      patchSelectedShape(
+        drag.handle === "rx" ? { radiusX: r } : { radiusY: r },
+      );
     }
   }
 
@@ -853,7 +1117,7 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
 
   /** Stamp one dab at frame UV (u, v) into the selected brush coverage. */
   function stampAt(/** @type {number} */ u, /** @type {number} */ v) {
-    const m = masks[selected];
+    const m = selectedShape();
     if (!m || m.type !== "brush" || !m.coverage || !m.coverageW || !m.coverageH)
       return;
     stampBrush(
@@ -982,22 +1246,147 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
 
   // --- sidebar sync ---
 
+  /** Display name for a component: per-type numbering within its group.
+   * @param {import("../tone/mask-math.js").MaskGroup} g
+   * @param {number} ci */
+  function componentName(g, ci) {
+    const type = g.components[ci].type;
+    let n = 0;
+    for (let j = 0; j <= ci; j++) if (g.components[j].type === type) n++;
+    return `${type === "linear" ? "Linear" : type === "radial" ? "Radial" : "Brush"} ${n}`;
+  }
+
+  /** The expanded component sub-list for the selected group.
+   * @param {import("../tone/mask-math.js").MaskGroup} g */
+  function buildComponentList(g) {
+    const off = !enabled || bypassed;
+    const box = el("div", "mask-comps");
+    g.components.forEach((c, ci) => {
+      const name = componentName(g, ci);
+      const row = el("div", "mask-comp");
+      row.classList.toggle("active", ci === selectedComp);
+      const badge = /** @type {HTMLButtonElement} */ (
+        el("button", "mask-comp-badge", c.mode === "subtract" ? "−" : "+")
+      );
+      badge.type = "button";
+      badge.disabled = off;
+      badge.classList.toggle("subtract", c.mode === "subtract");
+      badge.title =
+        c.mode === "subtract"
+          ? "Subtracts from the mask — tap to add"
+          : "Adds to the mask — tap to subtract";
+      badge.setAttribute("aria-label", `${name}: toggle add or subtract`);
+      badge.setAttribute("aria-pressed", String(c.mode === "subtract"));
+      badge.addEventListener("click", () => toggleComponentMode(ci));
+      const nameBtn = /** @type {HTMLButtonElement} */ (
+        el("button", "mask-comp-name", name)
+      );
+      nameBtn.type = "button";
+      nameBtn.disabled = off;
+      nameBtn.addEventListener("click", () => {
+        selectedComp = ci;
+        chooserMode = null;
+        syncUi();
+        drawOverlay();
+        handlers.onUiChange();
+      });
+      row.append(badge, nameBtn);
+      box.append(row);
+    });
+
+    // a mask whose components are all subtracts selects nothing — and
+    // inverted, it selects the *whole frame* (the shapes cut nothing from
+    // an empty selection). Say so instead of leaving a silently dead or
+    // silently global mask.
+    if (g.components.every((c) => c.mode === "subtract")) {
+      box.append(
+        el(
+          "div",
+          "mask-empty-hint",
+          g.invert
+            ? "inverted empty mask covers the whole image — shapes have no effect"
+            : "mask is empty — add a shape",
+        ),
+      );
+    }
+
+    if (chooserMode) {
+      // inline shape chooser (the crop tool's chip idiom): one tap picks
+      // the type, × cancels
+      const chips = el("div", "mask-chips");
+      chips.append(
+        el("span", "mask-chips-label", chooserMode === "add" ? "+" : "−"),
+      );
+      for (const type of /** @type {const} */ (["linear", "radial", "brush"])) {
+        const chip = /** @type {HTMLButtonElement} */ (
+          el(
+            "button",
+            "chip",
+            type === "linear"
+              ? "Linear"
+              : type === "radial"
+                ? "Radial"
+                : "Brush",
+          )
+        );
+        chip.type = "button";
+        chip.disabled =
+          off ||
+          componentBudgetFull() ||
+          (type === "brush" && brushBudgetFull());
+        const mode = chooserMode;
+        chip.addEventListener("click", () => addComponent(type, mode));
+        chips.append(chip);
+      }
+      const cancel = /** @type {HTMLButtonElement} */ (
+        el("button", "chip", "×")
+      );
+      cancel.type = "button";
+      cancel.setAttribute("aria-label", "Cancel");
+      cancel.addEventListener("click", () => {
+        chooserMode = null;
+        syncUi();
+      });
+      chips.append(cancel);
+      box.append(chips);
+    } else {
+      const actions = el("div", "mask-comp-actions");
+      const addBtn = /** @type {HTMLButtonElement} */ (
+        el("button", "", "+ Add")
+      );
+      const subBtn = /** @type {HTMLButtonElement} */ (
+        el("button", "", "− Subtract")
+      );
+      addBtn.type = "button";
+      subBtn.type = "button";
+      addBtn.disabled = off || componentBudgetFull();
+      subBtn.disabled = addBtn.disabled;
+      if (componentBudgetFull()) {
+        addBtn.title = subBtn.title = "Shape limit reached";
+      }
+      addBtn.addEventListener("click", () => {
+        chooserMode = "add";
+        syncUi();
+      });
+      subBtn.addEventListener("click", () => {
+        chooserMode = "subtract";
+        syncUi();
+      });
+      actions.append(addBtn, subBtn);
+      box.append(actions);
+    }
+    return box;
+  }
+
   function syncUi() {
-    addLinearBtn.disabled = !enabled || bypassed || masks.length >= MASK.MAX;
+    addLinearBtn.disabled =
+      !enabled || bypassed || masks.length >= MASK.MAX || componentBudgetFull();
     addRadialBtn.disabled = addLinearBtn.disabled;
-    addBrushBtn.disabled = addLinearBtn.disabled;
+    addBrushBtn.disabled = addLinearBtn.disabled || brushBudgetFull();
 
     list.textContent = "";
-    let linearN = 0;
-    let radialN = 0;
-    let brushN = 0;
     masks.forEach((m, i) => {
-      const name =
-        m.type === "linear"
-          ? `LINEAR ${++linearN}`
-          : m.type === "radial"
-            ? `RADIAL ${++radialN}`
-            : `BRUSH ${++brushN}`;
+      const name = `MASK ${i + 1}`;
       const item = el("div", "mask-item");
       item.classList.toggle("active", i === selected);
       const selectBtn = /** @type {HTMLButtonElement} */ (
@@ -1006,7 +1395,13 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       selectBtn.type = "button";
       selectBtn.disabled = !enabled || bypassed;
       selectBtn.addEventListener("click", () => {
-        selected = selected === i ? -1 : i;
+        if (selected === i) {
+          selected = -1;
+        } else {
+          selected = i;
+          selectedComp = 0;
+        }
+        chooserMode = null;
         syncUi();
         drawOverlay();
         handlers.onUiChange();
@@ -1028,11 +1423,14 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       });
       item.append(selectBtn, itemEye);
       list.append(item);
+      // the selected group expands into its component list
+      if (i === selected) list.append(buildComponentList(m));
     });
 
-    const sel = selected >= 0 ? masks[selected] : null;
+    const sel = selectedGroup();
     detail.hidden = !sel;
     if (!sel) return;
+    const shape = selectedShape();
     const controlsOff = !enabled || bypassed;
     invertBtn.disabled = controlsOff;
     showBtn.disabled = controlsOff;
@@ -1041,7 +1439,17 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     invertBtn.setAttribute("aria-pressed", String(sel.invert));
     showBtn.classList.toggle("active", showMask);
     showBtn.setAttribute("aria-pressed", String(showMask));
-    featherRow.hidden = sel.type !== "radial";
+    compSubtractBtn.disabled = controlsOff;
+    compInvertBtn.disabled = controlsOff;
+    compDeleteBtn.disabled = controlsOff;
+    compSubtractBtn.classList.toggle("active", shape?.mode === "subtract");
+    compSubtractBtn.setAttribute(
+      "aria-pressed",
+      String(shape?.mode === "subtract"),
+    );
+    compInvertBtn.classList.toggle("active", !!shape?.invert);
+    compInvertBtn.setAttribute("aria-pressed", String(!!shape?.invert));
+    featherRow.hidden = shape?.type !== "radial";
     syncBrushUi();
     for (const r of sliderRows) {
       const scaled = r.read(sel);
@@ -1061,6 +1469,10 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   store.subscribe((state) => {
     masks = state.masks ?? [];
     if (selected >= masks.length) selected = masks.length - 1;
+    const g = selectedGroup();
+    if (g && selectedComp >= g.components.length)
+      selectedComp = g.components.length - 1;
+    if (selectedComp < 0) selectedComp = 0;
     syncUi();
     drawOverlay();
   });
@@ -1069,12 +1481,12 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     /**
      * Settings as the pipeline should see them: disabled masks neutralized,
      * everything neutralized while the section eye is closed.
-     * @template {{ masks: readonly import("../tone/mask-math.js").Mask[] }} S
+     * @template {{ masks: readonly import("../tone/mask-math.js").MaskGroup[] }} S
      * @param {S} settings
      * @returns {S}
      */
     effective(settings) {
-      return effectiveMasks(settings, bypassed);
+      return effectiveMaskGroups(settings, bypassed);
     },
     /** Mask index the preview should tint red, or -1. The red overlay keys
      * off maskWeight in the shader, so it works for brush masks too. */
@@ -1083,21 +1495,31 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     },
     reposition,
     /** Frame dims changed (90° rotation) — masks keep their frame-UV
-     * coordinates, only the pixel-space normalization follows.
+     * coordinates, only the pixel-space normalization follows. Brush
+     * rasters are re-gridded onto the new frame's coverage grid so all
+     * rasters stay on one grid (the GPU texture-array invariant); this
+     * also normalizes just-restored edits that were saved under another
+     * orientation.
      * @param {number} frameW @param {number} frameH */
     setFrameSize(frameW, frameH) {
       imgW = frameW;
       imgH = frameH;
+      if (imgW > 0 && imgH > 0) {
+        const next = normalizeBrushGrids(masks, imgW, imgH);
+        if (next) commit(next);
+      }
     },
     /** @param {number} previewW @param {number} previewH */
     setImage(previewW, previewH) {
       imgW = previewW;
       imgH = previewH;
       selected = -1;
-      showMask = false;
+      selectedComp = 0;
+      chooserMode = null;
+      showMask = true; // back to the default for the new image
       brushCursor.hidden = true;
-      showBtn.classList.remove("active");
-      showBtn.setAttribute("aria-pressed", "false");
+      showBtn.classList.add("active");
+      showBtn.setAttribute("aria-pressed", "true");
     },
     /** @param {boolean} on */
     setEnabled(on) {
