@@ -1,5 +1,5 @@
 import { Decoder } from "./decode/client.js";
-import { boxDownscaleToRgba16 } from "./decode/downscale.js";
+import { boxDownscaleToRgba16, detailMaxEdge } from "./decode/downscale.js";
 import { createRenderer, FULL_VIEW } from "./gl/renderer.js";
 import { createStore } from "./state.js";
 import { ZERO_SETTINGS, cropPixelRect } from "./tone/tone-math.js";
@@ -46,6 +46,9 @@ const panelScroll = /** @type {HTMLElement} */ (
 const status = createStatus();
 const store = createStore();
 const decoder = new Decoder();
+// Own queue for background zoom-detail decodes, so one never delays the
+// next opened file's preview decode.
+const detailDecoder = new Decoder();
 const exporter = createExporter();
 const spatial = createSpatialAnalyzer();
 /** Guards stale presence-analysis results against newer opens. */
@@ -53,10 +56,22 @@ let spatialToken = 0;
 
 const renderer = createRenderer(canvas);
 
+/** Reported device memory in GB — a Chrome-only hint, absent elsewhere. */
+const deviceMemoryGb =
+  /** @type {{ deviceMemory?: number }} */ (navigator).deviceMemory ?? 8;
+/** GPU pixel budget for the zoom detail texture (8 bytes/px at RGBA16UI:
+ * 16 Mpx ≈ 128 MB), halved on low-memory devices. */
+const DETAIL_BUDGET_PX = deviceMemoryGb <= 4 ? 8e6 : 16e6;
+
 /** @type {File | null} */
 let currentFile = null;
 /** @type {{ width: number, height: number } | null} */
 let previewSize = null;
+/** Dims of the zoom detail texture once uploaded (source-oriented). */
+/** @type {{ width: number, height: number } | null} */
+let detailSize = null;
+/** Guards stale detail uploads against newer opens/closes. */
+let detailToken = 0;
 /** Preview pixels kept for image statistics (auto WB / auto tone). */
 /** @type {{ pixels: Uint16Array, width: number, height: number } | null} */
 let previewImage = null;
@@ -169,6 +184,14 @@ function frameSize() {
   return orientedDims(g.orient, previewSize.width, previewSize.height);
 }
 
+/** Oriented dims of the sharpest uploaded texture — the real texels the
+ * canvas backing store can resolve. */
+function renderSize() {
+  if (!previewSize) return null;
+  const best = detailSize ?? previewSize;
+  return orientedDims(crop.geometry().orient, best.width, best.height);
+}
+
 function layout() {
   const frame = frameSize();
   if (!frame || !renderer) return;
@@ -184,9 +207,19 @@ function layout() {
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
   const dpr = window.devicePixelRatio || 1;
+  // backing store capped at the real texels behind the visible region —
+  // the detail texture (when loaded) raises this beyond the preview, so
+  // hi-DPI displays and zoom get true resolution
+  const best = renderSize() ?? frame;
   renderer.setSize(
-    Math.min(Math.round(cssW * dpr), Math.round(srcW)),
-    Math.min(Math.round(cssH * dpr), Math.round(srcH)),
+    Math.min(
+      Math.round(cssW * dpr),
+      Math.round(Math.max(best.width * rect.w, 1)),
+    ),
+    Math.min(
+      Math.round(cssH * dpr),
+      Math.round(Math.max(best.height * rect.h, 1)),
+    ),
   );
   crop.reposition();
   masks.reposition();
@@ -202,6 +235,47 @@ window.addEventListener("pagehide", () => {
 });
 
 // --- open / decode ---
+
+/**
+ * Upgrade the on-screen image beyond the fit-sized preview so zooming has
+ * real pixels to show (issue #5). Two rungs, both off the open critical
+ * path: an instant repack of the halfSize decode already in hand, then —
+ * only when the sensor fits the pixel budget whole, keeping the work and
+ * memory bounded — a background full-resolution decode.
+ * @param {import("libraw-wasm").RawImageData} image the halfSize decode
+ * @param {{ width: number, height: number }} meta full sensor dims
+ * @param {Uint8Array} bytes original file bytes
+ * @param {number} token
+ */
+async function upgradeDetail(image, meta, bytes, token) {
+  if (token !== detailToken || !renderer || !previewSize) return;
+  const fullW = meta.width || image.width;
+  const fullH = meta.height || image.height;
+  const maxEdge = detailMaxEdge(
+    fullW,
+    fullH,
+    renderer.maxTextureSize,
+    DETAIL_BUDGET_PX,
+  );
+  /** @param {ReturnType<typeof boxDownscaleToRgba16>} img */
+  const apply = (img) => {
+    if (token !== detailToken || !renderer) return;
+    renderer.setDetail(img);
+    detailSize = { width: img.width, height: img.height };
+    layout();
+  };
+  try {
+    const half = boxDownscaleToRgba16(image, maxEdge);
+    if (half.width > previewSize.width) apply(half);
+    if (Math.max(fullW, fullH) > maxEdge) return; // full decode over budget
+    if (Math.max(fullW, fullH) <= Math.max(half.width, half.height)) return;
+    const { image: full } = await detailDecoder.decode(bytes, {});
+    if (token !== detailToken) return;
+    apply(boxDownscaleToRgba16(full, maxEdge));
+  } catch (err) {
+    console.warn("zoom detail upgrade failed:", err);
+  }
+}
 
 /** @param {File} file */
 async function openFile(file) {
@@ -231,6 +305,8 @@ async function openFile(file) {
         })
       : null;
     const preview = boxDownscaleToRgba16(image);
+    detailToken++; // any in-flight detail belongs to the previous image
+    detailSize = null;
     renderer.setImage(preview);
     // Presence (texture/clarity/dehaze) aux planes compute off-thread;
     // the sliders take effect as soon as they land.
@@ -275,6 +351,11 @@ async function openFile(file) {
       `${file.name} · ${meta.camera_make} ${meta.camera_model} · ` +
         `${meta.width}×${meta.height} (preview decoded in ${(decodeMs / 1000).toFixed(1)}s)` +
         (savedEdit ? " · edits restored" : ""),
+    );
+    // zoom detail waits for the first painted preview frame
+    const job = detailToken;
+    requestAnimationFrame(() =>
+      setTimeout(() => upgradeDetail(image, meta, bytes, job), 0),
     );
   } catch (err) {
     console.error(err);
@@ -383,7 +464,8 @@ const crop = initCrop(viewport, canvas, panelScroll, {
 });
 const zoom = initZoom(canvas, viewport, {
   getBounds: () => crop.rect(),
-  getImageSize: () => frameSize(),
+  // detail-aware: double-click 1:1 targets the sharpest loaded texels
+  getImageSize: () => renderSize(),
   onChange: () => {
     masks.reposition(); // the overlay maps masks through the zoom window
     queueRender();
@@ -447,11 +529,13 @@ function onClose() {
   if (!currentFile || opening) return;
   cancelAutosave();
   spatialToken++; // invalidate any in-flight presence analysis
+  detailToken++; // and any in-flight detail upgrade
   currentFile = null;
   currentEditKey = null;
   currentFileInfo = null;
   previewSize = null;
   previewImage = null;
+  detailSize = null;
   canvas.hidden = true;
   dropzone.setVisible(true);
   panel.setEnabled(false);

@@ -118,8 +118,9 @@ export function initZoom(
   }
 
   /**
-   * Double-click / double-tap: toggle between fit and 1:1 preview texels
-   * (with a 2× floor so small images still visibly jump).
+   * Double-click / double-tap: toggle between fit and 1:1 texels of the
+   * sharpest loaded texture (with a 2× floor so small images still
+   * visibly jump).
    * @param {number} clientX
    * @param {number} clientY
    */

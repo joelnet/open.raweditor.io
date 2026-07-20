@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { boxDownscaleToRgba16 } from "../downscale.js";
+import { boxDownscaleToRgba16, detailMaxEdge } from "../downscale.js";
 
 test("4x4 RGB u16 → 2x2 box averages", () => {
   // Each 2x2 block has a known average; channel values distinct.
@@ -88,4 +88,31 @@ test("rejects unsupported channel counts", () => {
       2,
     ),
   );
+});
+
+test("detailMaxEdge honors the pixel budget at the source aspect", () => {
+  // 24 MP 3:2 sensor, 16 Mpx budget → √(16e6 · 1.5) ≈ 4898
+  assert.equal(detailMaxEdge(6000, 4000, 16384, 16e6), 4898);
+  // orientation-agnostic
+  assert.equal(detailMaxEdge(4000, 6000, 16384, 16e6), 4898);
+  // square: edge = √budget
+  assert.equal(detailMaxEdge(4000, 4000, 16384, 16e6), 4000);
+});
+
+test("detailMaxEdge is clamped by the GPU max texture size", () => {
+  assert.equal(detailMaxEdge(6000, 4000, 4096, 16e6), 4096);
+});
+
+test("detailMaxEdge keeps the downscaled result inside the budget", () => {
+  for (const [w, h] of [
+    [6000, 4000], // 24 MP
+    [8256, 5504], // 45 MP
+    [9504, 6336], // 61 MP
+    [11648, 8736], // 100 MP
+  ]) {
+    const edge = detailMaxEdge(w, h, 16384, 16e6);
+    const factor = Math.ceil(Math.max(w, h) / edge);
+    const px = Math.ceil(w / factor) * Math.ceil(h / factor);
+    assert.ok(px <= 16e6, `${w}×${h} → ${px} px`);
+  }
 });

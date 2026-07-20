@@ -65,9 +65,11 @@ const DECODE_INPUT_GLSL =
 export const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 precision highp usampler2D;
+precision highp sampler2D;
 precision highp sampler2DArray;
 
-uniform usampler2D u_image;     // RGBA16UI, linear light
+uniform usampler2D u_image;     // RGBA16UI, linear light (fit preview or
+                                // the zoom-detail texture — renderer picks)
 uniform float u_temp;           // [-1, 1]
 uniform float u_tint;           // [-1, 1]
 uniform float u_exposure;       // EV
@@ -112,7 +114,9 @@ uniform float u_noiseDetail;    // [0, 1] — luminance detail preservation
 // single-pass): à trous detail planes of the source gamma-luma, the
 // Richardson-Lucy linear-luma delta, the guided-filter-refined haze amount,
 // Light Balance's guided tonal weight, and the luma-guided denoised chroma.
-// u_hasAux gates until ready.
+// u_hasAux gates until ready. The planes stay at preview resolution and are
+// sampled by normalized UV with LINEAR filtering, so they upsample cleanly
+// under the higher-res detail texture.
 uniform int u_hasAux;
 uniform sampler2D u_detail;     // c1, c2, c3, base (clarity residual)
 uniform sampler2D u_sharpenD;   // Richardson-Lucy linear-luma delta
@@ -488,10 +492,10 @@ vec3 applyMaskAdjust(vec3 rgb, float m, vec4 adjA, vec4 adjB, vec4 adjC) {
   return rgb;
 }
 
-vec3 applyMaskPresence(vec3 rgb, float ySrc, ivec2 p, float m, vec4 adjD) {
+vec3 applyMaskPresence(vec3 rgb, float ySrc, vec2 suv, float m, vec4 adjD) {
   float dehaze = adjD.w * m;
   if (dehaze != 0.0) {
-    float D = texelFetch(u_dehazeD, p, 0).r;
+    float D = texture(u_dehazeD, suv).r;
     float t = max(1.0 - ${f(SPATIAL.DEHAZE_OMEGA)} * dehaze * D,
       ${f(SPATIAL.DEHAZE_T_MIN)});
     rgb = max((rgb - u_airlight) / t + u_airlight, 0.0);
@@ -499,24 +503,24 @@ vec3 applyMaskPresence(vec3 rgb, float ySrc, ivec2 p, float m, vec4 adjD) {
 
   float sharpening = adjD.x * m;
   if (sharpening > 0.0) {
-    float delta = texelFetch(u_sharpenD, p, 0).r;
+    float delta = texture(u_sharpenD, suv).r;
     float yNew = max(ySrc + sharpening * delta, 0.0);
     rgb *= clamp(yNew / max(ySrc, 1e-5), 0.0, ${f(SPATIAL.RATIO_MAX)});
   }
 
-  float texture = adjD.y * m;
+  float tex = adjD.y * m;
   float clarity = adjD.z * m;
-  if (texture != 0.0 || clarity != 0.0) {
+  if (tex != 0.0 || clarity != 0.0) {
     float y0 = pow(max(ySrc, 0.0), 1.0 / ${f(SPATIAL.GAMMA)});
-    vec4 c = texelFetch(u_detail, p, 0);
+    vec4 c = texture(u_detail, suv);
     float delta = 0.0;
-    if (texture != 0.0) {
+    if (tex != 0.0) {
       delta += textureDelta(y0 - c.x,
-        ${f(SPATIAL.TEXTURE_WEIGHTS[0])}, ${f(SPATIAL.TEXTURE_THRESH[0])}, texture);
+        ${f(SPATIAL.TEXTURE_WEIGHTS[0])}, ${f(SPATIAL.TEXTURE_THRESH[0])}, tex);
       delta += textureDelta(c.x - c.y,
-        ${f(SPATIAL.TEXTURE_WEIGHTS[1])}, ${f(SPATIAL.TEXTURE_THRESH[1])}, texture);
+        ${f(SPATIAL.TEXTURE_WEIGHTS[1])}, ${f(SPATIAL.TEXTURE_THRESH[1])}, tex);
       delta += textureDelta(c.y - c.z,
-        ${f(SPATIAL.TEXTURE_WEIGHTS[2])}, ${f(SPATIAL.TEXTURE_THRESH[2])}, texture);
+        ${f(SPATIAL.TEXTURE_WEIGHTS[2])}, ${f(SPATIAL.TEXTURE_THRESH[2])}, tex);
     }
     if (clarity != 0.0) {
       float d = y0 - c.w;
@@ -530,6 +534,24 @@ vec3 applyMaskPresence(vec3 rgb, float ySrc, ivec2 p, float m, vec4 adjD) {
   }
 
   return rgb;
+}
+
+// Bilinear fetch of the image texture, decoded to [0, 1]. RGBA16UI is
+// non-filterable in WebGL2 (NEAREST is mandatory), so the four neighbors
+// are fetched and mixed by hand — without this, any magnification (zoom,
+// hi-DPI) shows hard texel blocks. Clamping each fetch reproduces
+// CLAMP_TO_EDGE at the borders.
+vec3 sampleImage(vec2 suv) {
+  ivec2 ts = textureSize(u_image, 0);
+  vec2 pos = suv * vec2(ts) - 0.5;
+  ivec2 p0 = ivec2(floor(pos));
+  vec2 fr = pos - vec2(p0);
+  ivec2 hi = ts - 1;
+  vec3 c00 = vec3(texelFetch(u_image, clamp(p0, ivec2(0), hi), 0).rgb);
+  vec3 c10 = vec3(texelFetch(u_image, clamp(p0 + ivec2(1, 0), ivec2(0), hi), 0).rgb);
+  vec3 c01 = vec3(texelFetch(u_image, clamp(p0 + ivec2(0, 1), ivec2(0), hi), 0).rgb);
+  vec3 c11 = vec3(texelFetch(u_image, clamp(p0 + ivec2(1, 1), ivec2(0), hi), 0).rgb);
+  return mix(mix(c00, c10, fr.x), mix(c01, c11, fr.x), fr.y) / 65535.0;
 }
 
 vec2 frameToSourceUv(vec2 uv) {
@@ -550,10 +572,8 @@ vec2 frameToSourceUv(vec2 uv) {
 }
 
 void main() {
-  ivec2 ts = textureSize(u_image, 0);
   vec2 suv = frameToSourceUv(v_uv);
-  ivec2 p = clamp(ivec2(suv * vec2(ts)), ivec2(0), ts - 1);
-  vec3 rgb = decodeInput(vec3(texelFetch(u_image, p, 0).rgb) / 65535.0);
+  vec3 rgb = decodeInput(sampleImage(suv));
 
   // Composite group weights, computed once for the presence loop, the tone
   // loop, and the overlay — mirrors groupWeight() in mask-math.js:
@@ -584,24 +604,24 @@ void main() {
   if (u_hasAux == 1) {
     // color NR first: blend denoised chroma in (luminance preserved)
     if (u_colorNoise > 0.0) {
-      vec2 cd = texelFetch(u_chromaD, p, 0).rg;
+      vec2 cd = texture(u_chromaD, suv).rg;
       rgb = colorNrBlend(rgb, cd, u_colorNoise);
     }
     float ySrc = dot(rgb, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
     if (u_dehaze != 0.0) {
-      float D = texelFetch(u_dehazeD, p, 0).r;
+      float D = texture(u_dehazeD, suv).r;
       float t = max(1.0 - ${f(SPATIAL.DEHAZE_OMEGA)} * u_dehaze * D,
         ${f(SPATIAL.DEHAZE_T_MIN)});
       rgb = max((rgb - u_airlight) / t + u_airlight, 0.0);
     }
     if (u_sharpening > 0.0) {
-      float delta = texelFetch(u_sharpenD, p, 0).r;
+      float delta = texture(u_sharpenD, suv).r;
       float yNew = max(ySrc + u_sharpening * delta, 0.0);
       rgb *= clamp(yNew / max(ySrc, 1e-5), 0.0, ${f(SPATIAL.RATIO_MAX)});
     }
     if (u_texture != 0.0 || u_clarity != 0.0 || u_lumaNoise > 0.0) {
       float y0 = pow(max(ySrc, 0.0), 1.0 / ${f(SPATIAL.GAMMA)});
-      vec4 c = texelFetch(u_detail, p, 0);
+      vec4 c = texture(u_detail, suv);
       float delta = 0.0;
       // luminance NR: soft-threshold (core) the finest three bands
       if (u_lumaNoise > 0.0)
@@ -630,10 +650,10 @@ void main() {
       if (i >= u_maskCount) break;
       float mw = gw[i];
       if (mw > 0.0) {
-        rgb = applyMaskPresence(rgb, ySrc, p, mw, u_maskAdjD[i]);
+        rgb = applyMaskPresence(rgb, ySrc, suv, mw, u_maskAdjD[i]);
         float mlb = u_maskAdjC[i].z * mw;
         if (mlb != 0.0) {
-          float lbw = texelFetch(u_lightBalanceW, p, 0).r;
+          float lbw = texture(u_lightBalanceW, suv).r;
           float gain = clamp(
             1.0 + ${f(TONE.LIGHT_BALANCE_STRENGTH)} * mlb * lbw,
             ${f(TONE.LIGHT_BALANCE_GAIN_RANGE[0])},
@@ -644,7 +664,7 @@ void main() {
       }
     }
     if (u_lightBalance != 0.0) {
-      float lbw = texelFetch(u_lightBalanceW, p, 0).r;
+      float lbw = texture(u_lightBalanceW, suv).r;
       float gain = clamp(
         1.0 + ${f(TONE.LIGHT_BALANCE_STRENGTH)} * u_lightBalance * lbw,
         ${f(TONE.LIGHT_BALANCE_GAIN_RANGE[0])},

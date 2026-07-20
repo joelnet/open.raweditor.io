@@ -1,7 +1,28 @@
-// CPU box-filter downscale of decoded RAW data to a GPU-friendly preview
-// size. Runs once per opened file; pure function so it's node:test-able.
+// CPU box-filter downscale of decoded RAW data to GPU-friendly sizes: the
+// fit preview at open, the larger zoom-detail texture right after. Pure
+// functions so they're node:test-able.
 
 export const MAX_PREVIEW_EDGE = 2560;
+
+/**
+ * Long-edge cap for the zoom detail texture: as large as both the GPU's
+ * max texture dimension and a pixel budget allow (GPU memory is 8 bytes/px
+ * at RGBA16). The preview (MAX_PREVIEW_EDGE) stays small for fast opens;
+ * the detail texture is what zooming in actually resolves.
+ *
+ * @param {number} width source image px
+ * @param {number} height
+ * @param {number} maxTextureSize GPU MAX_TEXTURE_SIZE
+ * @param {number} budgetPx max width × height for the detail texture
+ * @returns {number}
+ */
+export function detailMaxEdge(width, height, maxTextureSize, budgetPx) {
+  const long = Math.max(width, height, 1);
+  const short = Math.max(Math.min(width, height), 1);
+  // w·h ≤ budget at the source aspect ⇒ long edge ≤ √(budget · long/short)
+  const budgetEdge = Math.floor(Math.sqrt(budgetPx * (long / short)));
+  return Math.min(maxTextureSize, budgetEdge);
+}
 
 /**
  * Downscale 3- or 4-channel u8/u16 image data by an integer factor so the

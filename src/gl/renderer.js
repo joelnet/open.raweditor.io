@@ -1,4 +1,5 @@
-// WebGL2 preview renderer: one RGBA16UI texture, one fullscreen-triangle
+// WebGL2 preview renderer: RGBA16UI image textures (a fit-sized preview
+// plus an optional higher-res zoom detail), one fullscreen-triangle
 // program, one float uniform per tone setting plus a view rect (zoom/crop
 // window). A full re-render is a single draw call.
 
@@ -87,6 +88,8 @@ function compileShader(gl, type, source) {
 /**
  * @typedef {{
  *   setImage(img: { pixels: Uint16Array, width: number, height: number }): void,
+ *   setDetail(img: { pixels: Uint16Array, width: number, height: number }): void,
+ *   maxTextureSize: number,
  *   setAux(aux: PresenceAux | null): void,
  *   setSize(width: number, height: number): void,
  *   render(settings: import("../tone/tone-math.js").ToneSettings, view?: ViewRect, opts?: { maskOverlay?: number, geometry?: import("../tone/geometry.js").Geometry }): void,
@@ -148,8 +151,10 @@ export function createRenderer(canvas) {
   const locHsl = gl.getUniformLocation(program, "u_hsl");
   const locHasAux = gl.getUniformLocation(program, "u_hasAux");
   const locAirlight = gl.getUniformLocation(program, "u_airlight");
-  gl.uniform1i(gl.getUniformLocation(program, "u_image"), 0);
-  // unit 1 is the histogram readback target; spatial aux lives on 2, 3, 5, 6, 7
+  const locImage = gl.getUniformLocation(program, "u_image");
+  gl.uniform1i(locImage, 0);
+  // unit 1 is the histogram readback target; spatial aux lives on 2, 3, 5,
+  // 6, 7; the zoom detail texture on 8
   gl.uniform1i(gl.getUniformLocation(program, "u_detail"), 2);
   gl.uniform1i(gl.getUniformLocation(program, "u_dehazeD"), 3);
   gl.uniform1i(gl.getUniformLocation(program, "u_sharpenD"), 5);
@@ -407,27 +412,37 @@ export function createRenderer(canvas) {
     syncBrushMasks(comps);
   };
 
-  /** @param {number} unit */
-  const createNearestTexture = (unit) => {
+  /**
+   * @param {number} unit
+   * @param {number} filter
+   */
+  const createTexture = (unit, filter) => {
     gl.activeTexture(unit);
     gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   };
 
-  // Presence aux textures (image-res, sampled at the same texel as
-  // u_image). Bound once; texImage2D in setAux re-allocates per image.
-  createNearestTexture(gl.TEXTURE2);
-  createNearestTexture(gl.TEXTURE3);
-  createNearestTexture(gl.TEXTURE5);
-  createNearestTexture(gl.TEXTURE6);
-  createNearestTexture(gl.TEXTURE7);
-  // Integer textures are non-filterable: NEAREST is mandatory.
-  createNearestTexture(gl.TEXTURE0);
+  // Presence aux textures (preview-res, sampled by normalized UV): LINEAR —
+  // half-float formats are filterable in core WebGL2 — so they stay smooth
+  // when magnified or under the higher-res detail texture. Bound once;
+  // texImage2D in setAux re-allocates per image.
+  createTexture(gl.TEXTURE2, gl.LINEAR);
+  createTexture(gl.TEXTURE3, gl.LINEAR);
+  createTexture(gl.TEXTURE5, gl.LINEAR);
+  createTexture(gl.TEXTURE6, gl.LINEAR);
+  createTexture(gl.TEXTURE7, gl.LINEAR);
+  // Image textures: integer formats are non-filterable, NEAREST is
+  // mandatory (the shader bilinears by hand). Unit 8 holds the zoom
+  // detail, unit 0 the fit preview — created last so TEXTURE0 stays the
+  // active unit, which every helper here relies on and restores.
+  createTexture(gl.TEXTURE8, gl.NEAREST);
+  createTexture(gl.TEXTURE0, gl.NEAREST);
 
   let hasImage = false;
+  let hasDetail = false;
 
   // Histogram readback target: the same shader rendered at thumbnail size.
   // The shader samples by normalized UV, so a small viewport is a uniform
@@ -445,6 +460,11 @@ export function createRenderer(canvas) {
   };
 
   const renderer = {
+    /** Largest texture edge the GPU takes — caps the detail image size. */
+    maxTextureSize: /** @type {number} */ (
+      gl.getParameter(gl.MAX_TEXTURE_SIZE)
+    ),
+
     /**
      * Upload a preview image (RGBA u16, linear) to the GPU.
      * @param {{ pixels: Uint16Array, width: number, height: number }} img
@@ -468,6 +488,49 @@ export function createRenderer(canvas) {
       // stale aux belongs to the previous image — gate it off until the
       // spatial worker delivers this image's planes
       gl.uniform1i(locHasAux, 0);
+      // likewise the detail texture: drop it (and its GPU memory) until
+      // this image's upgrade lands
+      if (hasDetail) {
+        gl.activeTexture(gl.TEXTURE8);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA16UI,
+          1,
+          1,
+          0,
+          gl.RGBA_INTEGER,
+          gl.UNSIGNED_SHORT,
+          null,
+        );
+        gl.activeTexture(gl.TEXTURE0);
+        hasDetail = false;
+      }
+    },
+
+    /**
+     * Upload the higher-resolution detail image (same source, same aspect
+     * as the preview). render() switches to it whenever the preview would
+     * be magnified, so zooming shows real pixels instead of scaled-up
+     * preview texels.
+     * @param {{ pixels: Uint16Array, width: number, height: number }} img
+     */
+    setDetail({ pixels, width, height }) {
+      gl.activeTexture(gl.TEXTURE8);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA16UI,
+        width,
+        height,
+        0,
+        gl.RGBA_INTEGER,
+        gl.UNSIGNED_SHORT,
+        pixels,
+      );
+      gl.activeTexture(gl.TEXTURE0);
+      hasDetail = true;
     },
 
     /**
@@ -571,13 +634,15 @@ export function createRenderer(canvas) {
      */
     render(settings, view = FULL_VIEW, opts = {}) {
       if (!hasImage) return;
+      const geometry = opts.geometry ?? ZERO_GEOMETRY;
+      // Bind the smallest image texture that still gives every canvas
+      // pixel a source texel: the preview suffices at fit; once the view
+      // window would magnify it (zoom, hi-DPI), the detail takes over.
+      const frame = orientedDims(geometry.orient, imgW, imgH);
+      const useDetail = hasDetail && canvas.width > view.w * frame.width;
+      gl.uniform1i(locImage, useDetail ? 8 : 0);
       gl.viewport(0, 0, canvas.width, canvas.height);
-      setUniforms(
-        settings,
-        view,
-        opts.maskOverlay ?? -1,
-        opts.geometry ?? ZERO_GEOMETRY,
-      );
+      setUniforms(settings, view, opts.maskOverlay ?? -1, geometry);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
 
@@ -594,6 +659,8 @@ export function createRenderer(canvas) {
      */
     computeHistogram(settings, view = FULL_VIEW, geometry = ZERO_GEOMETRY) {
       if (!hasImage) return null;
+      // the thumbnail render subsamples anyway — the preview is plenty
+      gl.uniform1i(locImage, 0);
       if (!histoFbo) {
         const tex = gl.createTexture();
         gl.activeTexture(gl.TEXTURE1);
