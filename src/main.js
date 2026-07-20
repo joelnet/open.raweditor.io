@@ -178,7 +178,7 @@ function layout() {
   const srcH = Math.max(frame.height * rect.h, 1);
   const maxW = Math.max(viewport.clientWidth - pad * 2, 64);
   const maxH = Math.max(viewport.clientHeight - pad * 2, 64);
-  const scale = Math.min(maxW / srcW, maxH / srcH, 1);
+  const scale = Math.min(maxW / srcW, maxH / srcH);
   const cssW = Math.max(1, Math.round(srcW * scale));
   const cssH = Math.max(1, Math.round(srcH * scale));
   canvas.style.width = `${cssW}px`;
