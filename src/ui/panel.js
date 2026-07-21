@@ -43,6 +43,7 @@ function el(tag, className, text) {
  *                              width: number, height: number }) => void,
  *           getExportSize: () => { width: number, height: number } | null,
  *           onBypassChange: () => void,
+ *           onAdjustmentChange: () => void,
  *           onAuto: (title: string) => void,
  *           onRevert: () => void,
  *           onClose: () => void }} handlers
@@ -50,7 +51,15 @@ function el(tag, className, text) {
 export function buildPanel(
   container,
   store,
-  { onExport, getExportSize, onBypassChange, onAuto, onRevert, onClose },
+  {
+    onExport,
+    getExportSize,
+    onBypassChange,
+    onAdjustmentChange,
+    onAuto,
+    onRevert,
+    onClose,
+  },
 ) {
   /** A key can have several rows (e.g. luminance in 3-way and detail views).
    * @type {{ key: string, input: HTMLInputElement, value: HTMLElement,
@@ -101,9 +110,11 @@ export function buildPanel(
     input.setAttribute("aria-label", def.label.toLowerCase());
 
     input.addEventListener("input", () => {
+      onAdjustmentChange();
       store.set({ [def.key]: input.valueAsNumber * def.scale });
     });
     onDoubleTap(row, () => {
+      onAdjustmentChange();
       store.set({ [def.key]: (def.reset ?? 0) * def.scale });
     });
 

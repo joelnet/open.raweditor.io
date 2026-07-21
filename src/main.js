@@ -609,6 +609,9 @@ const panel = buildPanel(panelScroll, store, {
     queueRender();
     scheduleAutosave();
   },
+  // A global slider change is outside the selected mask's adjustment
+  // context. Clear the selection so the edit cannot be mistaken for local.
+  onAdjustmentChange: () => masks.deselect(),
   onAuto,
   onRevert,
   onClose,

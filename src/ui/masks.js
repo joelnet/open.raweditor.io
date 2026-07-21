@@ -1635,6 +1635,16 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     isBypassed() {
       return bypassed;
     },
+    /** Clear the selected mask when an edit moves outside mask context. */
+    deselect() {
+      if (selected < 0) return;
+      selected = -1;
+      selectedComp = 0;
+      chooserMode = null;
+      syncUi();
+      drawOverlay();
+      handlers.onUiChange();
+    },
     /** @param {boolean} off */
     setBypassed(off) {
       bypassed = off;
