@@ -19,6 +19,7 @@ import {
   stampBrush,
   effectiveMaskGroups,
   normalizeBrushGrids,
+  resampleCoverage,
 } from "../tone/mask-math.js";
 import { EYE_OPEN, EYE_CLOSED } from "./panel.js";
 import { onDoubleTap } from "./double-tap.js";
@@ -216,8 +217,10 @@ function svgEl(tag, attrs) {
  * @param {HTMLElement} panelContainer sidebar column the section renders into
  * @param {import("../state.js").Store} store
  * @param {{ getView: () => import("../gl/renderer.js").ViewRect,
- *           onUiChange: () => void }} handlers selection/overlay changes that
- *   need a re-render but don't touch the store
+ *           onUiChange: () => void,
+ *           onSkyRequest?: () => void }} handlers selection/overlay changes
+ *   that need a re-render but don't touch the store; onSkyRequest starts an
+ *   async sky detection that lands via addGeneratedMask()
  */
 export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   /** @type {readonly import("../tone/mask-math.js").MaskGroup[]} */
@@ -245,6 +248,9 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   let brushHardness = MASK.BRUSH_HARDNESS;
   let brushFlow = MASK.BRUSH_FLOW;
   let brushErase = false;
+  /** Sky detection in flight — the button disables so a slow model run
+   * can't be double-fired. */
+  let skyBusy = false;
 
   function selectedGroup() {
     return selected >= 0 && selected < masks.length ? masks[selected] : null;
@@ -360,10 +366,15 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   const addBrushBtn = /** @type {HTMLButtonElement} */ (
     el("button", "", "+ Brush")
   );
+  const addSkyBtn = /** @type {HTMLButtonElement} */ (
+    el("button", "", "+ Sky")
+  );
   addLinearBtn.type = "button";
   addRadialBtn.type = "button";
   addBrushBtn.type = "button";
-  addRow.append(addLinearBtn, addRadialBtn, addBrushBtn);
+  addSkyBtn.type = "button";
+  addSkyBtn.title = "Detect the sky and add it as a paintable mask";
+  addRow.append(addLinearBtn, addRadialBtn, addBrushBtn, addSkyBtn);
 
   const list = el("div", "mask-list");
   const detail = el("div", "mask-detail");
@@ -416,6 +427,12 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   addLinearBtn.addEventListener("click", () => addMask("linear"));
   addRadialBtn.addEventListener("click", () => addMask("radial"));
   addBrushBtn.addEventListener("click", () => addMask("brush"));
+  // Sky is asynchronous (model inference) — the owner runs the detection
+  // and hands the result back through addGeneratedMask().
+  addSkyBtn.addEventListener("click", () => {
+    if (skyBusy || addSkyBtn.disabled) return;
+    handlers.onSkyRequest?.();
+  });
 
   /**
    * Append a component to the selected group and select it. The composite
@@ -1383,6 +1400,8 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       !enabled || bypassed || masks.length >= MASK.MAX || componentBudgetFull();
     addRadialBtn.disabled = addLinearBtn.disabled;
     addBrushBtn.disabled = addLinearBtn.disabled || brushBudgetFull();
+    addSkyBtn.disabled = addBrushBtn.disabled || skyBusy;
+    addSkyBtn.textContent = skyBusy ? "Sky…" : "+ Sky";
 
     list.textContent = "";
     masks.forEach((m, i) => {
@@ -1492,6 +1511,42 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
      * off maskWeight in the shader, so it works for brush masks too. */
     overlayIndex() {
       return showMask && selectionActive() ? selected : -1;
+    },
+    /** Sky detection running: disable the button and show progress on it.
+     * @param {boolean} busy */
+    setSkyBusy(busy) {
+      skyBusy = busy;
+      syncUi();
+    },
+    /**
+     * Land an asynchronously generated raster (the sky detection result) as
+     * a new mask: a group of one add brush component whose coverage is the
+     * raster — from here on it is an ordinary brush mask (paintable,
+     * subtractable, persisted, exported). Selects it with the red overlay
+     * on, exactly like addMask(). No-ops if the image changed the budgets
+     * away while the detection ran.
+     * @param {Uint8Array} coverage
+     * @param {number} w raster grid dims
+     * @param {number} h
+     * @returns {boolean} whether the mask was added
+     */
+    addGeneratedMask(coverage, w, h) {
+      if (!enabled || masks.length >= MASK.MAX) return false;
+      if (componentBudgetFull() || brushBudgetFull()) return false;
+      if (imgW <= 0 || imgH <= 0) return false;
+      const dims = brushCoverageDims(imgW, imgH);
+      const component = createBrushComponent(dims.w, dims.h, "add");
+      component.coverage =
+        w === dims.w && h === dims.h
+          ? coverage
+          : resampleCoverage(coverage, w, h, dims.w, dims.h);
+      component.coverageVersion = 1;
+      showMask = true;
+      selected = masks.length;
+      selectedComp = 0;
+      chooserMode = null;
+      commit([...masks, createMaskGroup(component)]);
+      return true;
     },
     reposition,
     /** Frame dims changed (90° rotation) — masks keep their frame-UV

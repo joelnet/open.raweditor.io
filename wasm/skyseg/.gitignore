@@ -1,0 +1,3 @@
+# prebuilt ncnn webassembly release — re-download via the URL in build.sh
+ncnn-wasm.zip
+ncnn-*-webassembly/

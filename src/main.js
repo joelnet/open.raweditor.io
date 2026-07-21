@@ -6,6 +6,7 @@ import { ZERO_SETTINGS, cropPixelRect } from "./tone/tone-math.js";
 import { orientedDims, frameRectToSource } from "./tone/geometry.js";
 import { autoWhiteBalance, autoTone } from "./tone/auto.js";
 import { createSpatialAnalyzer } from "./tone/spatial-client.js";
+import { createSkyDetector } from "./tone/sky-client.js";
 import { buildPanel } from "./ui/panel.js";
 import { initHistogram } from "./ui/histogram.js";
 import { initCrop } from "./ui/crop.js";
@@ -53,6 +54,8 @@ const exporter = createExporter();
 const spatial = createSpatialAnalyzer();
 /** Guards stale presence-analysis results against newer opens. */
 let spatialToken = 0;
+const sky = createSkyDetector();
+let skyBusy = false;
 
 const renderer = createRenderer(canvas);
 
@@ -477,7 +480,46 @@ const masks = initMasks(viewport, canvas, panelScroll, store, {
     queueRender();
     scheduleAutosave();
   },
+  onSkyRequest: () => void addSkyMask(),
 });
+
+/** "+ Sky": run the sky-segmentation model over the neutral preview (see
+ * sky-worker.js) and land the result as a regular brush-raster mask. The
+ * first press downloads the model (~3MB, cached after); a run takes a
+ * moment, so the status bar carries the wait and `currentFile` identity
+ * guards against the image changing mid-flight. */
+async function addSkyMask() {
+  if (!previewImage || !currentFile || opening || skyBusy) return;
+  const file = currentFile;
+  skyBusy = true;
+  masks.setSkyBusy(true);
+  status.setProgress("Detecting sky…");
+  status.setBusy(true);
+  try {
+    const result = await sky.detect(previewImage, crop.geometry());
+    if (file !== currentFile) return; // a different image landed meanwhile
+    if (!result) {
+      status.setError("No sky detected in this image.");
+      return;
+    }
+    if (masks.addGeneratedMask(result.coverage, result.w, result.h)) {
+      status.setProgress("Sky mask added — Paint/Erase refines it");
+    } else {
+      status.setError("Sky mask not added: mask limit reached.");
+    }
+  } catch (err) {
+    console.error("sky detection failed:", err);
+    if (file === currentFile) {
+      status.setError(
+        `Sky detection failed: ${/** @type {any} */ (err)?.message ?? err}`,
+      );
+    }
+  } finally {
+    skyBusy = false;
+    masks.setSkyBusy(false);
+    status.setBusy(false);
+  }
+}
 // Auto WB / auto tone: image statistics over the cropped preview. Auto tone
 // runs downstream of white balance, so it sees the current effective WB.
 /** @param {string} title */
