@@ -232,6 +232,11 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
   // Show Mask defaults ON: selecting a mask immediately shows its red
   // composite coverage (toggle off from the group tools).
   let showMask = true;
+  // While a detail slider (feather / adjustments) is being dragged, the red
+  // composite is suppressed so the image reacts visibly under the change;
+  // it comes back on release. Show Mask itself is untouched — this is a
+  // temporary override, not a toggle.
+  let adjusting = false;
   let bypassed = false;
   let enabled = false;
   let cropActive = false;
@@ -582,6 +587,21 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
    *           scale: number, decimals: number, signed: boolean }[]} */
   const sliderRows = [];
 
+  /** @param {boolean} on */
+  function setAdjusting(on) {
+    if (adjusting === on) return;
+    adjusting = on;
+    handlers.onUiChange();
+  }
+
+  /** Slider drag released (anywhere — the pointer usually leaves the input
+   * mid-drag): restore the red composite. */
+  function endAdjusting() {
+    window.removeEventListener("pointerup", endAdjusting);
+    window.removeEventListener("pointercancel", endAdjusting);
+    setAdjusting(false);
+  }
+
   /**
    * @param {{ label: string, min: number, max: number, step: number,
    *           scale: number, decimals: number, signed?: boolean }} def
@@ -601,6 +621,15 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
     input.value = "0";
     input.setAttribute("aria-label", `mask ${def.label.toLowerCase()}`);
     input.addEventListener("input", () => write(input.valueAsNumber));
+    // Grabbing the slider hides the red composite for the duration of the
+    // drag — the tint would sit on top of exactly the pixels the adjustment
+    // changes. Feather keeps its feedback either way: the SVG rings (inner
+    // ellipse / boundary lines) live outside the tint.
+    input.addEventListener("pointerdown", () => {
+      setAdjusting(true);
+      window.addEventListener("pointerup", endAdjusting);
+      window.addEventListener("pointercancel", endAdjusting);
+    });
     onDoubleTap(row, () => write(reset));
     row.append(label, value, input);
     sliderRows.push({
@@ -1508,9 +1537,10 @@ export function initMasks(viewport, canvas, panelContainer, store, handlers) {
       return effectiveMaskGroups(settings, bypassed);
     },
     /** Mask index the preview should tint red, or -1. The red overlay keys
-     * off maskWeight in the shader, so it works for brush masks too. */
+     * off maskWeight in the shader, so it works for brush masks too.
+     * Suppressed mid-drag on a detail slider (see `adjusting`). */
     overlayIndex() {
-      return showMask && selectionActive() ? selected : -1;
+      return showMask && !adjusting && selectionActive() ? selected : -1;
     },
     /** Sky detection running: disable the button and show progress on it.
      * @param {boolean} busy */
