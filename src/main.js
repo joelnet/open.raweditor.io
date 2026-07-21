@@ -65,6 +65,11 @@ const deviceMemoryGb =
 /** GPU pixel budget for the zoom detail texture (8 bytes/px at RGBA16UI:
  * 16 Mpx ≈ 128 MB), halved on low-memory devices. */
 const DETAIL_BUDGET_PX = deviceMemoryGb <= 4 ? 8e6 : 16e6;
+/** Sensor pixel budget for the speculative background full decode — a
+ * separate limit from the texture budget above, since the decode's cost is
+ * transient worker memory (~6 bytes/px), not GPU memory. Export runs the
+ * same decode on demand; this only bounds the unasked-for background run. */
+const DECODE_BUDGET_PX = deviceMemoryGb <= 4 ? 36e6 : 150e6;
 
 /** @type {File | null} */
 let currentFile = null;
@@ -242,9 +247,10 @@ window.addEventListener("pagehide", () => {
 /**
  * Upgrade the on-screen image beyond the fit-sized preview so zooming has
  * real pixels to show (issue #5). Two rungs, both off the open critical
- * path: an instant repack of the halfSize decode already in hand, then —
- * only when the sensor fits the pixel budget whole, keeping the work and
- * memory bounded — a background full-resolution decode.
+ * path: an instant repack of the halfSize decode already in hand (superpixel
+ * binning, so magnified it shows a chroma checker), then a background
+ * full-resolution decode — properly demosaiced, box-filtered down to the
+ * texture cap — for any sensor within the decode pixel budget.
  * @param {import("libraw-wasm").RawImageData} image the halfSize decode
  * @param {{ width: number, height: number }} meta full sensor dims
  * @param {Uint8Array} bytes original file bytes
@@ -270,7 +276,7 @@ async function upgradeDetail(image, meta, bytes, token) {
   try {
     const half = boxDownscaleToRgba16(image, maxEdge);
     if (half.width > previewSize.width) apply(half);
-    if (Math.max(fullW, fullH) > maxEdge) return; // full decode over budget
+    if (fullW * fullH > DECODE_BUDGET_PX) return; // full decode over budget
     if (Math.max(fullW, fullH) <= Math.max(half.width, half.height)) return;
     const { image: full } = await detailDecoder.decode(bytes, {});
     if (token !== detailToken) return;
