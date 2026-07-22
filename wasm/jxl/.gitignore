@@ -1,0 +1,3 @@
+# libjxl checkout (or symlink to one) + wasm build tree — re-fetched and
+# rebuilt by build.sh
+libjxl

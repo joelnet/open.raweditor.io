@@ -4,7 +4,7 @@ import prettier from "eslint-plugin-prettier/recommended";
 
 export default [
   {
-    ignores: ["node_modules/", "dist/", "src/tone/skyseg/"],
+    ignores: ["node_modules/", "dist/", "src/tone/skyseg/", "src/decode/jxl/"],
   },
   js.configs.recommended,
   prettier,

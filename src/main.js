@@ -276,6 +276,9 @@ async function upgradeDetail(image, meta, bytes, token) {
   try {
     const half = boxDownscaleToRgba16(image, maxEdge);
     if (half.width > previewSize.width) apply(half);
+    // The open decode was already full resolution (the JXL DNG path
+    // ignores halfSize) — the repack above is all the detail there is.
+    if (image.width >= fullW && image.height >= fullH) return;
     if (fullW * fullH > DECODE_BUDGET_PX) return; // full decode over budget
     if (Math.max(fullW, fullH) <= Math.max(half.width, half.height)) return;
     const { image: full } = await detailDecoder.decode(bytes, {});

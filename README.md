@@ -8,7 +8,10 @@ decoding, editing, and export all happen client-side.
 ## Features
 
 - **RAW decoding** via [libraw-wasm](https://www.npmjs.com/package/libraw-wasm)
-  (LibRaw compiled to WebAssembly, pthreads build) in a worker
+  (LibRaw compiled to WebAssembly, pthreads build) in a worker; DNG 1.7
+  raws with JPEG XL payloads (recent Samsung/Apple phones), which LibRaw
+  cannot unpack, get their own [libjxl](https://github.com/libjxl/libjxl)
+  wasm decode + DNG develop path (`src/decode/dng.js`, `wasm/jxl/`)
 - **Live preview** on a WebGL2 canvas; every slider is a shader uniform, so
   edits render at full frame rate on a 16-bit linear-light texture
 - **White balance**: temp / tint, with auto (gray-world + near-gray refinement)

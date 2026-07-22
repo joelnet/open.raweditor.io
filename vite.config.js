@@ -102,11 +102,11 @@ export default defineConfig({
         // long-lived cache entry could otherwise pin an old copy.
         importScripts: [`/share-target-sw.js?v=${pkg.version}`],
         globPatterns: ["**/*.{html,js,css,wasm}"],
-        // The sky-segmentation module + model (~3MB, public/skyseg/) stay
-        // out of the precache so installing the PWA stays lean; the first
-        // "+ Sky" press downloads them once and the runtime route below
-        // keeps them for offline use after that.
-        globIgnores: ["skyseg/**"],
+        // The sky-segmentation module + model (~3MB, public/skyseg/) and
+        // the JXL-DNG decoder (~1MB, public/jxl/) stay out of the precache
+        // so installing the PWA stays lean; the first use downloads them
+        // once and the runtime routes below keep them for offline use.
+        globIgnores: ["skyseg/**", "jxl/**"],
         runtimeCaching: [
           {
             urlPattern: /\/skyseg\//,
@@ -114,6 +114,14 @@ export default defineConfig({
             options: {
               cacheName: "skyseg",
               expiration: { maxEntries: 8 },
+            },
+          },
+          {
+            urlPattern: /\/jxl\//,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "jxl",
+              expiration: { maxEntries: 4 },
             },
           },
         ],
