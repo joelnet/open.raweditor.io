@@ -11,6 +11,7 @@
 //
 // Callers drive it through src/decode/jxl-worker.js.
 
+#include <jxl/cms.h>
 #include <jxl/decode.h>
 
 #include <cstdint>
@@ -38,7 +39,13 @@ int jxl_decode(const uint8_t *data, size_t size) {
   if (!dec) return -1;
 
   int rc = -2;
-  if (JxlDecoderSubscribeEvents(dec, JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE) !=
+  bool uses_original_profile = true;
+  if (JxlDecoderSetCms(dec, *JxlGetDefaultCms()) != JXL_DEC_SUCCESS) {
+    goto done;
+  }
+  if (JxlDecoderSubscribeEvents(dec, JXL_DEC_BASIC_INFO |
+                                         JXL_DEC_COLOR_ENCODING |
+                                         JXL_DEC_FULL_IMAGE) !=
       JXL_DEC_SUCCESS) {
     goto done;
   }
@@ -57,6 +64,35 @@ int jxl_decode(const uint8_t *data, size_t size) {
       g_width = info.xsize;
       g_height = info.ysize;
       g_channels = info.num_color_channels; // 1 (gray) or 3 (RGB)
+      uses_original_profile = info.uses_original_profile;
+      break;
+    }
+    case JXL_DEC_COLOR_ENCODING: {
+      // Lossless (modular) streams return the stored samples untouched.
+      // XYB-encoded (lossy) streams are *converted* to the declared output
+      // encoding — typically gamma sRGB, which would poison the linear
+      // develop math downstream (WB gains on gamma data read as a magenta
+      // cast). Ask for the same encoding with a linear transfer instead.
+      if (uses_original_profile) break;
+      JxlColorEncoding enc;
+      if (JxlDecoderGetColorAsEncodedProfile(
+              dec, JXL_COLOR_PROFILE_TARGET_DATA, &enc) != JXL_DEC_SUCCESS) {
+        // ICC-only stream: fall back to linear sRGB, the develop target.
+        enc.color_space =
+            g_channels == 1 ? JXL_COLOR_SPACE_GRAY : JXL_COLOR_SPACE_RGB;
+        enc.white_point = JXL_WHITE_POINT_D65;
+        enc.primaries = JXL_PRIMARIES_SRGB;
+        enc.transfer_function = JXL_TRANSFER_FUNCTION_SRGB; // forced linear below
+        enc.rendering_intent = JXL_RENDERING_INTENT_RELATIVE;
+      }
+      if (enc.transfer_function != JXL_TRANSFER_FUNCTION_LINEAR) {
+        enc.transfer_function = JXL_TRANSFER_FUNCTION_LINEAR;
+        if (JxlDecoderSetOutputColorProfile(dec, &enc, nullptr, 0) !=
+            JXL_DEC_SUCCESS) {
+          rc = -10;
+          goto done;
+        }
+      }
       break;
     }
     case JXL_DEC_NEED_IMAGE_OUT_BUFFER: {
