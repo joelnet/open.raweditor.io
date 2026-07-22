@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Synthesize a Samsung-S24-style LOSSY JPEG XL DNG (VarDCT/XYB, sRGB-tagged
-gamma samples) to reproduce the magenta-cast report and validate the fix.
+"""Synthesize a lossy JPEG XL DNG (VarDCT/XYB, sRGB-tagged) the way real
+writers do (verified against a Lightroom X100VI pano): the payload is
+COLORIMETRIC — the codestream tag fully describes the samples — so a
+correct reader must NOT apply the DNG develop (AsShotNeutral/ColorMatrix)
+on top. The container still carries camera-style color tags to prove they
+are ignored for XYB payloads.
 
-Scene (camera space, linear): a gray ramp (neutral surfaces = AsShotNeutral-
-scaled), plus saturated R/G/B patches. If decode+develop is correct, the ramp
-renders NEUTRAL gray. If gamma samples are fed to the linear develop, the
-ramp turns magenta (R x1.75, B x1.14 vs G).
+Scene: a neutral gray ramp plus saturated R/G/B/white patches. Rendered
+correctly, the ramp is NEUTRAL gray; a reader that wrongly applies the WB
+gains turns it magenta (R x1.88, B x1.81 vs G with these tags).
 """
 import io
 import struct
@@ -27,12 +30,10 @@ img[H // 2 :, quarter : 2 * quarter] = [0.05, 0.8, 0.05]
 img[H // 2 :, 2 * quarter : 3 * quarter] = [0.05, 0.05, 0.8]
 img[H // 2 :, 3 * quarter :] = [0.95, 0.95, 0.95]
 
-# Camera records scene * neutral response (white balance not yet applied)
-cam_linear = img * NEUTRAL[None, None, :]
-
-# Writer gamma-encodes for the perceptual XYB codec (sRGB-ish 1/2.2)
-cam_gamma = np.clip(cam_linear, 0, 1) ** (1 / 2.2)
-samples = np.round(cam_gamma * 65535).astype(np.uint16)
+# The writer stores the colorimetric image itself, sRGB-gamma encoded for
+# the perceptual XYB codec.
+srgb_gamma = np.clip(img, 0, 1) ** (1 / 2.2)
+samples = np.round(srgb_gamma * 65535).astype(np.uint16)
 
 jxl = imagecodecs.jpegxl_encode(samples, distance=1.0, effort=4,
     transfer=imagecodecs.JPEGXL.TRANSFER_FUNCTION.SRGB)

@@ -154,6 +154,35 @@ test("developLinearRgb honors black/white levels", () => {
   assert.ok(Math.abs(out.data[9] / 65535 - mid) < 1e-3);
 });
 
+test("developLinearRgb colorimetric mode only orients", () => {
+  // Camera-style tags present but the payload is colorimetric (XYB) —
+  // white balance, matrix, and levels must all be skipped.
+  const dng = baseDng({
+    asShotNeutral: [0.5, 1, 0.5],
+    colorMatrix1: [2, 0, 0, 0, 2, 0, 0, 0, 2],
+    calibrationIlluminant1: 21,
+    blackLevel: [4096],
+    whiteLevel: [61440],
+    width: 2,
+    height: 1,
+  });
+  const data = new Uint16Array([1000, 2000, 3000, /**/ 40000, 50000, 60000]);
+  const out = developLinearRgb(data, dng, { colorimetric: true });
+  assert.equal(out.width, 2);
+  assert.equal(out.height, 1);
+  assert.deepEqual([...out.data], [...data]);
+  // Orientation still applies (rotate 90 CW of a 2×1 → 1×2).
+  const rotated = developLinearRgb(
+    data,
+    { ...dng, orientation: 6 },
+    { colorimetric: true },
+  );
+  assert.equal(rotated.width, 1);
+  assert.equal(rotated.height, 2);
+  assert.deepEqual([...rotated.data.slice(0, 3)], [1000, 2000, 3000]);
+  assert.deepEqual([...rotated.data.slice(3, 6)], [40000, 50000, 60000]);
+});
+
 test("developLinearRgb orients the output", () => {
   // 2×1 image rotated 90 CW (orientation 6) becomes 1×2 with the left
   // pixel on top.

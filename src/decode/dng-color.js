@@ -147,14 +147,43 @@ export function orientIndex(orientation, x, y, w, h) {
  * white balance, matrix to linear sRGB, clip, orient. Returns a new
  * buffer shaped like libraw-wasm's RawImageData.
  *
+ * With `colorimetric` set, the samples are already full-scale linear sRGB
+ * (an XYB JXL payload after the decoder's color conversion) — the DNG
+ * color tags do not apply to them, so only orientation is performed.
+ *
  * @param {Uint16Array} data interleaved RGB, dng.width × dng.height
  * @param {import("./dng.js").JxlDng} dng
+ * @param {{ colorimetric?: boolean }} [opts]
  * @returns {{ data: Uint16Array, width: number, height: number,
  *             colors: 3, bits: 16 }}
  */
-export function developLinearRgb(data, dng) {
+export function developLinearRgb(data, dng, opts = {}) {
   const { width: w, height: h, orientation } = dng;
   if (data.length < w * h * 3) throw new Error("truncated raw data");
+
+  if (opts.colorimetric) {
+    const oriented = orientedSize(orientation, w, h);
+    if (orientation === 1) {
+      return { data, width: w, height: h, colors: 3, bits: 16 };
+    }
+    const out = new Uint16Array(w * h * 3);
+    let i = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++, i += 3) {
+        const o = orientIndex(orientation, x, y, w, h) * 3;
+        out[o] = data[i];
+        out[o + 1] = data[i + 1];
+        out[o + 2] = data[i + 2];
+      }
+    }
+    return {
+      data: out,
+      width: oriented.width,
+      height: oriented.height,
+      colors: 3,
+      bits: 16,
+    };
+  }
 
   // Per-channel black/white scaling. BlackLevel may repeat over a CFA
   // pattern; LinearRaw files typically store one value (or all equal).

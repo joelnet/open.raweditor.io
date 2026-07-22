@@ -87,7 +87,7 @@ em++ -O3 -std=c++17 -msimd128 \
   "$B/third_party/brotli/libbrotlicommon.a" \
   -o "$OUT_MOD/jxl-module.mjs" \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
-  -sEXPORTED_FUNCTIONS=_jxl_decode,_jxl_width,_jxl_height,_jxl_channels,_jxl_pixels,_jxl_release,_malloc,_free \
+  -sEXPORTED_FUNCTIONS=_jxl_decode,_jxl_width,_jxl_height,_jxl_channels,_jxl_colorimetric,_jxl_pixels,_jxl_release,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU16 \
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB \
   -sFILESYSTEM=0 -sASSERTIONS=0

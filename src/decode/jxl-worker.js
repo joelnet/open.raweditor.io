@@ -65,7 +65,8 @@ function checkSupported(dng) {
  * Decode one JXL codestream into interleaved u16 samples.
  * @param {any} mod emscripten module
  * @param {Uint8Array} bytes
- * @returns {{ data: Uint16Array, width: number, height: number, channels: number }}
+ * @returns {{ data: Uint16Array, width: number, height: number,
+ *             channels: number, colorimetric: boolean }}
  */
 function decodeCodestream(mod, bytes) {
   const ptr = mod._malloc(bytes.length);
@@ -77,12 +78,13 @@ function decodeCodestream(mod, bytes) {
     const width = mod._jxl_width();
     const height = mod._jxl_height();
     const channels = mod._jxl_channels();
+    const colorimetric = mod._jxl_colorimetric() !== 0;
     const pixels = mod._jxl_pixels();
     const count = width * height * channels;
     // Copy out of the wasm heap before releasing the result.
     const data = new Uint16Array(mod.HEAPU16.buffer, pixels, count).slice();
     mod._jxl_release();
-    return { data, width, height, channels };
+    return { data, width, height, channels, colorimetric };
   } finally {
     mod._free(ptr);
   }
@@ -92,12 +94,16 @@ function decodeCodestream(mod, bytes) {
  * @param {import("./dng.js").JxlDng} dng
  * @param {Uint8Array} fileBytes
  * @param {any} mod
- * @returns {Uint16Array} interleaved RGB, dng.width × dng.height
+ * @returns {{ raw: Uint16Array, colorimetric: boolean }} interleaved RGB,
+ *   dng.width × dng.height; colorimetric = the samples are already linear
+ *   sRGB (XYB payload) and must not be run through the DNG develop
  */
 function assembleTiles(dng, fileBytes, mod) {
   const { width, height, tiles } = dng;
   /** @type {Uint16Array | null} */
   let full = null;
+  /** @type {boolean | null} */
+  let colorimetric = null;
   for (const tile of tiles) {
     if (!tile.byteCount || tile.offset + tile.byteCount > fileBytes.length) {
       // A zero-filled hole would look like a successful decode.
@@ -108,9 +114,14 @@ function assembleTiles(dng, fileBytes, mod) {
     if (t.channels !== 3) {
       throw new Error(`unsupported JXL raw layout (${t.channels} channels)`);
     }
+    // All tiles must agree on what their samples mean.
+    if (colorimetric === null) colorimetric = t.colorimetric;
+    else if (colorimetric !== t.colorimetric) {
+      throw new Error("JXL DNG mixes colorimetric and raw tiles");
+    }
     // Samsung-style single full strip: the decode IS the image.
     if (tiles.length === 1 && t.width === width && t.height === height) {
-      return t.data;
+      return { raw: t.data, colorimetric };
     }
     full ??= new Uint16Array(width * height * 3);
     // Blit, clamping tiles that overhang the right/bottom edges.
@@ -122,8 +133,10 @@ function assembleTiles(dng, fileBytes, mod) {
       full.set(t.data.subarray(src, src + copyW * 3), dst);
     }
   }
-  if (!full) throw new Error("JXL DNG contains no image data");
-  return full;
+  if (!full || colorimetric === null) {
+    throw new Error("JXL DNG contains no image data");
+  }
+  return { raw: full, colorimetric };
 }
 
 const ctx = /** @type {any} */ (self);
@@ -135,8 +148,8 @@ ctx.onmessage = async (/** @type {MessageEvent} */ e) => {
     if (!dng) throw new Error("not a JXL-compressed DNG");
     checkSupported(dng);
     const mod = await loadModule();
-    const raw = assembleTiles(dng, bytes, mod);
-    const image = developLinearRgb(raw, dng);
+    const { raw, colorimetric } = assembleTiles(dng, bytes, mod);
+    const image = developLinearRgb(raw, dng, { colorimetric });
     const size = orientedSize(dng.orientation, dng.width, dng.height);
     const meta = {
       camera_make: dng.make,
