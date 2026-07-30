@@ -347,6 +347,42 @@ export function parseJxlDng(buffer) {
 }
 
 /**
+ * Read the camera fields out of a bare TIFF/EXIF structure — what a JPEG's
+ * APP1 segment and a HEIC's Exif item both contain (see exif.js). Returns
+ * null when the buffer is not a TIFF.
+ * @param {ArrayBuffer | Uint8Array} buffer
+ * @returns {{ make: string, model: string, orientation: number,
+ *             iso: number, shutter: number, aperture: number,
+ *             focalLen: number } | null}
+ */
+export function parseTiffExif(buffer) {
+  const view =
+    buffer instanceof Uint8Array
+      ? new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+      : new DataView(buffer);
+  if (view.byteLength < 8) return null;
+  const order = view.getUint16(0, false);
+  const le = order === 0x4949;
+  if (!le && order !== 0x4d4d) return null;
+  if (view.getUint16(2, le) !== 42) return null;
+  const { ifds, exif } = collectIfds(view, le);
+  const ifd0 = ifds[0];
+  if (!ifd0) return null;
+  /** @param {Ifd | null} ifd @param {number} tag */
+  const num = (ifd, tag) =>
+    (ifd ? values(view, le, ifd.get(tag))?.[0] : 0) ?? 0;
+  return {
+    make: ascii(view, le, ifd0.get(TAG.MAKE)) ?? "",
+    model: ascii(view, le, ifd0.get(TAG.MODEL)) ?? "",
+    orientation: num(ifd0, TAG.ORIENTATION) || 1,
+    iso: num(exif, TAG.ISO_SPEED),
+    shutter: num(exif, TAG.EXPOSURE_TIME),
+    aperture: num(exif, TAG.F_NUMBER),
+    focalLen: num(exif, TAG.FOCAL_LENGTH),
+  };
+}
+
+/**
  * Cheap detection for the decode router: is this a DNG whose raw image is
  * JPEG XL compressed?
  * @param {ArrayBuffer | Uint8Array} buffer

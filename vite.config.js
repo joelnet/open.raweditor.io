@@ -16,14 +16,19 @@ const isolationHeaders = {
 // self-signed cert. Accept the browser warning once on the device.
 const useHttps = !!process.env.HTTPS;
 
-// The RAW formats libraw-wasm is wired up for. None have an IANA
-// registration; these `image/x-*` names are the ones Chromium and Android's
-// MIME table use. The extensions are declared alongside them because
-// platforms disagree about which of the two they match a file on.
-const RAW_TYPES = {
+// The formats the decode pipeline accepts: the RAW formats libraw-wasm is
+// wired up for, plus the developed bitmaps src/decode/bitmap-worker.js
+// handles. The RAW types have no IANA registration; those `image/x-*`
+// names are the ones Chromium and Android's MIME table use. The extensions
+// are declared alongside them because platforms disagree about which of
+// the two they match a file on.
+const FILE_TYPES = {
   "image/x-sony-arw": [".arw"],
   "image/x-fuji-raf": [".raf"],
   "image/x-adobe-dng": [".dng"],
+  "image/jpeg": [".jpg", ".jpeg"],
+  "image/heic": [".heic"],
+  "image/heif": [".heif"],
 };
 
 export default defineConfig({
@@ -73,7 +78,7 @@ export default defineConfig({
         // target below *is* a navigation (a POST), so opting in would drop
         // shared files. The default lets Chromium navigate the existing
         // window, which the launchQueue consumer handles either way.
-        file_handlers: [{ action: "/", accept: RAW_TYPES }],
+        file_handlers: [{ action: "/", accept: FILE_TYPES }],
         // Android share sheet. Files can only be shared into a PWA over a
         // multipart POST, which static hosting cannot answer — the service
         // worker intercepts it instead (public/share-target-sw.js).
@@ -86,8 +91,8 @@ export default defineConfig({
               {
                 name: "file",
                 accept: [
-                  ...Object.keys(RAW_TYPES),
-                  ...Object.values(RAW_TYPES).flat(),
+                  ...Object.keys(FILE_TYPES),
+                  ...Object.values(FILE_TYPES).flat(),
                 ],
               },
             ],
@@ -102,11 +107,12 @@ export default defineConfig({
         // long-lived cache entry could otherwise pin an old copy.
         importScripts: [`/share-target-sw.js?v=${pkg.version}`],
         globPatterns: ["**/*.{html,js,css,wasm}"],
-        // The sky-segmentation module + model (~3MB, public/skyseg/) and
-        // the JXL-DNG decoder (~1MB, public/jxl/) stay out of the precache
-        // so installing the PWA stays lean; the first use downloads them
-        // once and the runtime routes below keep them for offline use.
-        globIgnores: ["skyseg/**", "jxl/**"],
+        // The sky-segmentation module + model (~3MB, public/skyseg/), the
+        // JXL-DNG decoder (~1MB, public/jxl/), and the libheif HEIC decoder
+        // wasm (~1MB, a hashed dist asset) stay out of the precache so
+        // installing the PWA stays lean; the first use downloads them once
+        // and the runtime routes below keep them for offline use.
+        globIgnores: ["skyseg/**", "jxl/**", "**/libheif-*.wasm"],
         runtimeCaching: [
           {
             urlPattern: /\/skyseg\//,
@@ -122,6 +128,14 @@ export default defineConfig({
             options: {
               cacheName: "jxl",
               expiration: { maxEntries: 4 },
+            },
+          },
+          {
+            urlPattern: /\/libheif-.*\.wasm$/,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "heif",
+              expiration: { maxEntries: 2 },
             },
           },
         ],

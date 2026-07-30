@@ -12,7 +12,7 @@ import { initHistogram } from "./ui/histogram.js";
 import { initCrop } from "./ui/crop.js";
 import { initMasks } from "./ui/masks.js";
 import { initZoom } from "./ui/zoom.js";
-import { initDropzone, isSupportedRaw } from "./ui/dropzone.js";
+import { initDropzone, isSupportedFile } from "./ui/dropzone.js";
 import { initDivider } from "./ui/divider.js";
 import { initElevator } from "./ui/elevator.js";
 import { initCollapse } from "./ui/collapse.js";
@@ -359,8 +359,12 @@ async function openFile(file) {
     histo.setHasImage(true);
     histo.setExif(meta);
     compare.setHasImage(true);
+    // Bitmap files without EXIF have no camera to name.
+    const camera = [meta.camera_make, meta.camera_model]
+      .filter(Boolean)
+      .join(" ");
     status.setFile(
-      `${file.name} · ${meta.camera_make} ${meta.camera_model} · ` +
+      `${file.name}${camera ? ` · ${camera}` : ""} · ` +
         `${meta.width}×${meta.height} (preview decoded in ${(decodeMs / 1000).toFixed(1)}s)` +
         (savedEdit ? " · edits restored" : ""),
     );
@@ -374,7 +378,7 @@ async function openFile(file) {
     status.setFile(
       currentFile
         ? `${currentFile.name} (previous image kept)`
-        : "No file loaded: drop a RAW file",
+        : "No file loaded: drop a photo",
     );
     status.setError(
       `Could not decode ${file.name}: ${/** @type {any} */ (err)?.message ?? err}`,
@@ -600,7 +604,7 @@ function onClose() {
   panel.resetBypass();
   masks.resetBypass();
   store.set({ ...ZERO_SETTINGS });
-  status.setFile("No file loaded: drop a RAW file");
+  status.setFile("No file loaded: drop a photo");
   status.setProgress("");
   status.clearProgressBar();
 }
@@ -637,7 +641,9 @@ const presets = buildPresets(panelScroll, {
 initInstallPrompt(panelScroll);
 /** @param {string} name */
 function rejectFile(name) {
-  status.setError(`${name} is not a supported RAW file (.ARW, .RAF, .DNG)`);
+  status.setError(
+    `${name} is not a supported file (.ARW, .RAF, .DNG, .JPG, .HEIC)`,
+  );
 }
 const dropzone = initDropzone({ onFile: openFile, onReject: rejectFile });
 
@@ -645,7 +651,7 @@ const dropzone = initDropzone({ onFile: openFile, onReject: rejectFile });
  * extension check, so they get it here.
  * @param {File} file */
 function intakeFile(file) {
-  if (isSupportedRaw(file)) openFile(file);
+  if (isSupportedFile(file)) openFile(file);
   else rejectFile(file.name);
 }
 // Collapse every section by default (except EXPORT / REVERT) — runs after all
@@ -659,7 +665,7 @@ if (!renderer) {
     "WebGL2 is not available in this browser, so it cannot preview.",
   );
 } else {
-  status.setFile("No file loaded: drop a RAW file");
+  status.setFile("No file loaded: drop a photo");
   store.set({ ...ZERO_SETTINGS }); // sync slider readouts
   pruneSavedEdits().catch((err) =>
     console.warn("could not prune saved edits:", err),

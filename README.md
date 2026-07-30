@@ -1,9 +1,9 @@
 # Open Raw Editor
 
-A RAW photo editor that runs entirely in the browser. Drop a RAW file,
-adjust it with familiar sliders on a live WebGL preview, and export a
-full-resolution PNG, JPG, or 16-bit TIFF. Files never leave your machine:
-decoding, editing, and export all happen client-side.
+A RAW photo editor that runs entirely in the browser. Drop a RAW file (or
+a JPG/HEIC), adjust it with familiar sliders on a live WebGL preview, and
+export a full-resolution PNG, JPG, or 16-bit TIFF. Files never leave your
+machine: decoding, editing, and export all happen client-side.
 
 ## Features
 
@@ -12,6 +12,12 @@ decoding, editing, and export all happen client-side.
   raws with JPEG XL payloads (recent Samsung/Apple phones), which LibRaw
   cannot unpack, get their own [libjxl](https://github.com/libjxl/libjxl)
   wasm decode + DNG develop path (`src/decode/dng.js`, `wasm/jxl/`)
+- **JPG and HEIC** open too (`src/decode/bitmap-worker.js`): decoded to
+  sRGB by the browser's own codecs where possible (with color management
+  and EXIF orientation for free), with a lazy-loaded
+  [libheif](https://github.com/strukturag/libheif) wasm fallback for HEIC
+  outside Safari — including a Display P3 → sRGB gamut conversion, since
+  libheif does no color management
 - **Live preview** on a WebGL2 canvas; every slider is a shader uniform, so
   edits render at full frame rate on a 16-bit linear-light texture
 - **White balance**: temp / tint, with auto (gray-world + near-gray refinement)
@@ -61,8 +67,8 @@ Besides the dropzone, an installed app is offered two OS-level entry points,
 declared in the manifest (`vite.config.js`) and picked up by `src/launch.js`:
 
 - **File Handling** — `file_handlers` registers the app against `.arw`,
-  `.raf`, and `.dng`, so "Open with…" or a double-click launches it.
-  Chromium delivers the handles on `window.launchQueue`.
+  `.raf`, `.dng`, `.jpg`, and `.heic`, so "Open with…" or a double-click
+  launches it. Chromium delivers the handles on `window.launchQueue`.
 - **Web Share Target** — `share_target` puts the app in the Android share
   sheet. Files can only be shared into a PWA over a multipart POST, and
   Cloudflare's static assets answer nothing but GET, so `public/share-target-sw.js`

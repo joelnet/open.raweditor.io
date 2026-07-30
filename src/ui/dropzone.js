@@ -1,14 +1,16 @@
 // File intake: browse button, hidden file input, and drag-and-drop over
-// the whole window. Only supported RAW extensions are accepted.
+// the whole window. Only supported extensions are accepted: the RAW
+// formats libraw-wasm is wired up for, plus the developed-bitmap formats
+// bitmap-worker.js decodes.
 
-const ACCEPTED = /\.(arw|raf|dng)$/i;
+const ACCEPTED = /\.(arw|raf|dng|jpe?g|heic|heif)$/i;
 
 /**
  * Also used for files the OS hands straight to the app, which never pass
  * through the dropzone — see src/launch.js.
  * @param {File} file
  */
-export function isSupportedRaw(file) {
+export function isSupportedFile(file) {
   return ACCEPTED.test(file.name);
 }
 
@@ -29,7 +31,7 @@ export function initDropzone({ onFile, onReject }) {
   /** @param {File | undefined | null} file */
   function handle(file) {
     if (!file) return;
-    if (!isSupportedRaw(file)) {
+    if (!isSupportedFile(file)) {
       onReject(file.name);
       return;
     }

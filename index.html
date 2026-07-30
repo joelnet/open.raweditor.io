@@ -15,14 +15,17 @@
       <section id="viewport">
         <canvas id="preview" hidden></canvas>
         <div id="dropzone">
-          <p class="dz-title">DROP RAW FILE</p>
-          <p class="dz-hint">Sony .ARW &middot; Fujifilm .RAF &middot; DNG</p>
+          <p class="dz-title">DROP PHOTO</p>
+          <p class="dz-hint">
+            Sony .ARW &middot; Fujifilm .RAF &middot; DNG &middot; JPG &middot;
+            HEIC
+          </p>
           <button id="pick-file" type="button">Browse&hellip;</button>
           <input
             id="file-input"
             type="file"
             hidden
-            aria-label="Choose a RAW file"
+            aria-label="Choose a photo"
           />
           <span id="dz-version">%APP_VERSION%</span>
         </div>
