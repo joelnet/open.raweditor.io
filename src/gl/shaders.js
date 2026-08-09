@@ -1,7 +1,7 @@
 // GLSL for the preview path. The fragment shader mirrors tone-math.js
 // step-for-step (presence → white balance → exposure → whites/blacks →
 // contrast → highlights/shadows → local masks → vibrance/saturation →
-// color grading → sRGB encode); constants are interpolated from
+// color grading → sRGB encode → tone curve); constants are interpolated from
 // tone/constants.js so the GPU preview and the CPU export can never drift
 // apart. Presence (sharpening/texture/clarity/dehaze) reads per-image aux textures
 // from spatial-worker.js and mirrors spatial.js, which the export applies
@@ -16,6 +16,7 @@ import {
   MASK,
   EFFECTS,
   NR,
+  CURVE,
   INPUT_TRANSFER,
   LUMA,
 } from "../tone/constants.js";
@@ -98,6 +99,14 @@ uniform float u_gradeHighLum;   // [-1, 1]
 uniform float u_gradeBlending;  // [0, 1]
 uniform float u_gradeBalance;   // [-1, 1]
 
+// TONE CURVE: master + per-channel point curves baked to an RGBA32F LUT
+// (tone/curve.js buildCurveLut — .rgb the channel curves, .a the master),
+// sampled with texelFetch + manual mix so the CPU export interpolates
+// identically. u_hasCurve gates the stage; an identity curve costs nothing.
+uniform sampler2D u_curveLut;   // ${CURVE.LUT_SIZE} × 1, bound on unit 9
+uniform int u_hasCurve;
+uniform float u_curveSat;       // [0, 1] — REFINE SATURATION blend
+
 // EFFECTS: display-referred post-step (grain / noise / invert)
 uniform float u_invert;         // 0 or 1 (photo negative)
 uniform float u_grainAmount;    // [-1, 1] (only the magnitude matters)
@@ -172,6 +181,30 @@ vec3 srgbDecode(vec3 c) {
   vec3 a = c / 12.92;
   vec3 b = pow((c + 0.055) / 1.055, vec3(2.4));
   return mix(b, a, vec3(lo));
+}
+
+// one channel of the tone-curve LUT with linear interpolation between
+// entries — mirrors sampleCurveLut() in tone/curve.js
+float curveLutAt(float x, int ch) {
+  float t = clamp(x, 0.0, 1.0) * ${f(CURVE.LUT_SIZE - 1)};
+  int i = int(t);
+  int j = min(i + 1, ${CURVE.LUT_SIZE - 1});
+  return mix(texelFetch(u_curveLut, ivec2(i, 0), 0)[ch],
+             texelFetch(u_curveLut, ivec2(j, 0), 0)[ch],
+             t - float(i));
+}
+
+// tone curve on one display-referred sRGB pixel — mirrors applyCurveLut()
+// in tone/curve.js: channel curves first at full effect, then the master
+// curve with the REFINE SATURATION blend (1 = per channel like a classic
+// RGB curve, 0 = the hue/sat-preserving luminance ratio master(Y)/Y).
+vec3 applyCurve(vec3 c) {
+  vec3 ch = vec3(curveLutAt(c.r, 0), curveLutAt(c.g, 1), curveLutAt(c.b, 2));
+  vec3 full = vec3(curveLutAt(ch.r, 3), curveLutAt(ch.g, 3), curveLutAt(ch.b, 3));
+  float y = dot(ch, vec3(${f(LUMA[0])}, ${f(LUMA[1])}, ${f(LUMA[2])}));
+  float my = curveLutAt(y, 3);
+  vec3 lumaOnly = y > ${f(CURVE.LUMA_EPS)} ? ch * (my / y) : vec3(my);
+  return clamp(mix(lumaOnly, full, u_curveSat), 0.0, 1.0);
 }
 
 // pure wheel hue → RGB — mirrors hueColor() in tone-math.js
@@ -799,6 +832,10 @@ void main() {
     // 8. clamp + display encode
     display = srgbEncode(clamp(rgb, 0.0, 1.0));
   }
+
+  // 8.5 tone curve on the display-referred result — mirrors the
+  // applyCurveLut() call in toneMapRows (tone-math.js)
+  if (u_hasCurve == 1) display = applyCurve(display);
 
   // EFFECTS: grain / chromatic noise / photo-negative invert on the final
   // display-referred RGB — inlined identically to the post-step in

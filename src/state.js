@@ -7,7 +7,7 @@ import { ZERO_SETTINGS } from "./tone/tone-math.js";
 
 /**
  * @typedef {import("./tone/tone-math.js").ToneSettings} ToneSettings
- * @typedef {Exclude<keyof ToneSettings, "masks">} SliderKey scalar keys only
+ * @typedef {Exclude<keyof ToneSettings, "masks" | "curve">} SliderKey scalar keys only
  */
 
 /**
@@ -186,6 +186,27 @@ export const NR_SLIDERS = /** @type {const} */ ([
     scale: 0.01,
     decimals: 0,
     reset: 50,
+    signed: false,
+  },
+]);
+
+/**
+ * TONE CURVE section: the curve itself is a bespoke canvas widget
+ * (ui/curve.js) over the non-scalar `curve` store key; REFINE SATURATION
+ * is its one slider — ACR's "Refine" (default 100): how much of the master
+ * curve's saturation side effect survives (see CURVE in tone/constants.js).
+ * @type {readonly SliderDef[]}
+ */
+export const CURVE_SLIDERS = /** @type {const} */ ([
+  {
+    key: "curveSat",
+    label: "REFINE SATURATION",
+    min: 0,
+    max: 100,
+    step: 1,
+    scale: 0.01,
+    decimals: 0,
+    reset: 100,
     signed: false,
   },
 ]);
@@ -383,14 +404,17 @@ export const GRADE_KEYS = /** @type {readonly SliderKey[]} */ ([
 /**
  * Sidebar sections, in display order. `auto` adds an AUTO button; `grading`
  * swaps the default slider list for the color-grading wheel UI; `mixer`
- * swaps it for the per-band HSL color mixer UI.
+ * swaps it for the per-band HSL color mixer UI; `curve` for the tone-curve
+ * canvas.
  * @typedef {{ title: string, sliders: readonly SliderDef[], auto: boolean,
- *             grading?: boolean, mixer?: boolean, effects?: boolean }} Section
+ *             grading?: boolean, mixer?: boolean, effects?: boolean,
+ *             curve?: boolean }} Section
  * @type {readonly Section[]}
  */
 export const SECTIONS = [
   { title: "WHITE BALANCE", sliders: WB_SLIDERS, auto: true },
   { title: "TONE", sliders: TONE_SLIDERS, auto: true },
+  { title: "TONE CURVE", sliders: CURVE_SLIDERS, auto: false, curve: true },
   { title: "COLOR", sliders: COLOR_SLIDERS, auto: false },
   { title: "PRESENCE", sliders: PRESENCE_SLIDERS, auto: false },
   { title: "NOISE REDUCTION", sliders: NR_SLIDERS, auto: false },

@@ -11,6 +11,7 @@ import {
   validateEditSnapshot,
 } from "../edit-persistence.js";
 import { ZERO_SETTINGS } from "../tone/tone-math.js";
+import { ZERO_CURVE } from "../tone/curve.js";
 import {
   createBrushComponent,
   createBrushMask,
@@ -122,6 +123,106 @@ test("version-1 edits migrate: single-shape masks lift into groups", () => {
   });
   assert.ok(record);
   assert.equal(record.version, EDIT_SCHEMA_VERSION);
+});
+
+test("tone curves round-trip; malformed channels fall back to identity", () => {
+  const snapshot = createEditSnapshot({
+    settings: {
+      ...ZERO_SETTINGS,
+      curveSat: 0.4,
+      curve: {
+        master: [
+          [0, 0],
+          [0.25, 0.15],
+          [1, 1],
+        ],
+        r: [
+          [0, 0.05],
+          [1, 0.95],
+        ],
+        g: ZERO_CURVE.g,
+        b: ZERO_CURVE.b,
+      },
+    },
+    cropRect: { x: 0, y: 0, w: 1, h: 1 },
+    geometry: { orient: 0, angle: 0, flipH: false, flipV: false },
+    panelBypassed: [],
+    masksBypassed: false,
+  });
+  const restored = validateEditSnapshot(snapshot);
+  assert.equal(restored.settings.curveSat, 0.4);
+  assert.deepEqual(restored.settings.curve.master, [
+    [0, 0],
+    [0.25, 0.15],
+    [1, 1],
+  ]);
+  assert.deepEqual(restored.settings.curve.r, [
+    [0, 0.05],
+    [1, 0.95],
+  ]);
+  assert.deepEqual(restored.settings.curve.g, [
+    [0, 0],
+    [1, 1],
+  ]);
+
+  // garbage: non-finite / non-pair entries drop, points sort by x, values
+  // clamp, and channels left with fewer than two points reset to identity
+  const dirty = validateEditSnapshot({
+    version: EDIT_SCHEMA_VERSION,
+    settings: {
+      ...ZERO_SETTINGS,
+      curve: {
+        master: [[0.9, 2], [0.1, -1], ["x", 0.5], [NaN, 0.5], null],
+        r: [[0.5, 0.5]],
+        g: "nope",
+      },
+    },
+    cropRect: { x: 0, y: 0, w: 1, h: 1 },
+    geometry: { orient: 0, angle: 0, flipH: false, flipV: false },
+    panelBypassed: [],
+    masksBypassed: false,
+  });
+  assert.deepEqual(dirty.settings.curve.master, [
+    [0.1, 0],
+    [0.9, 1],
+  ]);
+  assert.deepEqual(dirty.settings.curve.r, [
+    [0, 0],
+    [1, 1],
+  ]);
+  assert.deepEqual(dirty.settings.curve.g, [
+    [0, 0],
+    [1, 1],
+  ]);
+
+  // records that predate the curve get the identity curve and default sat
+  const legacy = validateEditSnapshot({
+    version: EDIT_SCHEMA_VERSION,
+    settings: { ...ZERO_SETTINGS, curve: undefined, curveSat: undefined },
+    cropRect: { x: 0, y: 0, w: 1, h: 1 },
+    geometry: { orient: 0, angle: 0, flipH: false, flipV: false },
+    panelBypassed: [],
+    masksBypassed: false,
+  });
+  assert.deepEqual(legacy.settings.curve, {
+    master: [
+      [0, 0],
+      [1, 1],
+    ],
+    r: [
+      [0, 0],
+      [1, 1],
+    ],
+    g: [
+      [0, 0],
+      [1, 1],
+    ],
+    b: [
+      [0, 0],
+      [1, 1],
+    ],
+  });
+  assert.equal(legacy.settings.curveSat, 1);
 });
 
 test("brush rasters with mismatched dimensions are dropped", () => {

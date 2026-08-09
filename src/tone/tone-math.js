@@ -11,6 +11,12 @@ import {
 } from "./constants.js";
 import { prepareGroup, groupWeight } from "./mask-math.js";
 import {
+  ZERO_CURVE,
+  isIdentityCurve,
+  buildCurveLut,
+  applyCurveLut,
+} from "./curve.js";
+import {
   ZERO_GEOMETRY,
   isIdentityGeometry,
   orientedDims,
@@ -23,7 +29,9 @@ import {
  * except positive-only sharpening/grain controls in [0, 1].
  * `masks` are local adjustments — mask groups whose shape components
  * composite into one weight per group; treat the array as immutable —
- * always replace it, never mutate in place.
+ * always replace it, never mutate in place. `curve` is the tone curve's
+ * control points (see tone/curve.js) — immutable the same way; `curveSat`
+ * is its REFINE SATURATION blend in [0, 1].
  * @typedef {{ temp: number, tint: number, exposure: number, contrast: number,
  *             lightBalance: number, highlights: number, shadows: number, whites: number,
  *             blacks: number, sharpening: number, texture: number,
@@ -48,6 +56,7 @@ import {
  *             invert: number, grainAmount: number, grainSize: number,
  *             grainMidtones: number, noise: number,
  *             lumaNoise: number, colorNoise: number, noiseDetail: number,
+ *             curve: import("./curve.js").ToneCurve, curveSat: number,
  *             masks: readonly import("./mask-math.js").MaskGroup[]
  *           }} ToneSettings
  */
@@ -119,6 +128,11 @@ export const ZERO_SETTINGS = Object.freeze({
   lumaNoise: 0,
   colorNoise: 0,
   noiseDetail: 0.5,
+  // TONE CURVE: identity points; curveSat sits at 1 (UI 100, the ACR
+  // default — classic per-channel application) but only matters when the
+  // curve is non-identity, so this stays an identity setting.
+  curve: ZERO_CURVE,
+  curveSat: 1,
   masks: Object.freeze([]),
 });
 
@@ -490,7 +504,7 @@ export const HSL_BAND_KEYS = /** @type {const} */ ([
   ["hslMagentaHue", "hslMagentaSat", "hslMagentaLum"],
 ]);
 
-/** @typedef {Exclude<keyof ToneSettings, "masks">} SettingsKey */
+/** @typedef {Exclude<keyof ToneSettings, "masks" | "curve">} SettingsKey */
 
 /**
  * Pegtop soft-light blend: smooth, identity at blend 0.5, and pins black
@@ -885,6 +899,11 @@ export function toneMapRows(
     ? masks.map((mk) => prepareGroup(mk, frame.width, frame.height))
     : null;
   const weights = masks ? new Float64Array(masks.length) : undefined;
+  // Tone curve LUT, baked once per call (the spline never runs per pixel);
+  // rebuilt per chunk is fine — it costs microseconds against 256 rows.
+  const curveLut = isIdentityCurve(settings.curve)
+    ? null
+    : buildCurveLut(settings.curve);
 
   // Straighten transform constants (mirrors frameToSource in geometry.js,
   // inlined to keep the per-pixel path allocation-free).
@@ -966,6 +985,11 @@ export function toneMapRows(
         }
       }
       let [or, og, ob] = applyTonePixel(r, g, b, settings, weights);
+      // tone curve on the display-referred result — same position as the
+      // shader's step 8.5 (before the display effects)
+      if (curveLut) {
+        [or, og, ob] = applyCurveLut(curveLut, settings.curveSat, or, og, ob);
+      }
       // Shared display-referred post-step (grain / noise / invert), keyed
       // off frame-normalized coords so it matches the GPU preview at any
       // resolution — inlined identically in the fragment shader's main().

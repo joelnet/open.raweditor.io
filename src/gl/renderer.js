@@ -4,8 +4,9 @@
 // window). A full re-render is a single draw call.
 
 import { VERTEX_SHADER, FRAGMENT_SHADER } from "./shaders.js";
-import { MASK } from "../tone/constants.js";
+import { CURVE, MASK } from "../tone/constants.js";
 import { HSL_BAND_KEYS } from "../tone/tone-math.js";
+import { ZERO_CURVE, isIdentityCurve, buildCurveLut } from "../tone/curve.js";
 import { ZERO_GEOMETRY, orientedDims, coverScale } from "../tone/geometry.js";
 
 /**
@@ -51,6 +52,7 @@ const UNIFORMS = /** @type {const} */ ([
   "lumaNoise",
   "colorNoise",
   "noiseDetail",
+  "curveSat",
 ]);
 
 /**
@@ -150,19 +152,22 @@ export function createRenderer(canvas) {
   const locMaskOverlay = gl.getUniformLocation(program, "u_maskOverlay");
   const locHsl = gl.getUniformLocation(program, "u_hsl");
   const locHasAux = gl.getUniformLocation(program, "u_hasAux");
+  const locHasCurve = gl.getUniformLocation(program, "u_hasCurve");
   const locAirlight = gl.getUniformLocation(program, "u_airlight");
   const locImage = gl.getUniformLocation(program, "u_image");
   gl.uniform1i(locImage, 0);
   // unit 1 is the histogram readback target; spatial aux lives on 2, 3, 5,
-  // 6, 7; the zoom detail texture on 8
+  // 6, 7; the zoom detail texture on 8; the tone-curve LUT on 9
   gl.uniform1i(gl.getUniformLocation(program, "u_detail"), 2);
   gl.uniform1i(gl.getUniformLocation(program, "u_dehazeD"), 3);
   gl.uniform1i(gl.getUniformLocation(program, "u_sharpenD"), 5);
   gl.uniform1i(gl.getUniformLocation(program, "u_lightBalanceW"), 6);
   gl.uniform1i(gl.getUniformLocation(program, "u_chromaD"), 7);
+  gl.uniform1i(gl.getUniformLocation(program, "u_curveLut"), 9);
   // brush-mask coverage array lives on unit 4
   gl.uniform1i(gl.getUniformLocation(program, "u_brushMask"), 4);
   gl.uniform1i(locHasAux, 0);
+  gl.uniform1i(locHasCurve, 0);
 
   // Packed color-mixer band staging (hue, sat, lum per band), reused
   // across draws.
@@ -323,6 +328,9 @@ export function createRenderer(canvas) {
 
   let imgW = 0;
   let imgH = 0;
+  /** Last curve object baked into the LUT texture — reference equality is
+   *  the dirty check, since the UI always replaces the curve wholesale. */
+  let lastCurve = ZERO_CURVE;
 
   /**
    * @param {import("../tone/tone-math.js").ToneSettings} settings
@@ -343,6 +351,27 @@ export function createRenderer(canvas) {
     gl.uniform3fv(locHsl, hslVals);
     gl.uniform2f(locViewOffset, view.x, view.y);
     gl.uniform2f(locViewScale, view.w, view.h);
+
+    // tone curve: identity gates the stage off; a replaced curve object
+    // re-bakes the spline LUT and uploads it (16 KB, only on actual edits)
+    const hasCurve = !isIdentityCurve(settings.curve);
+    gl.uniform1i(locHasCurve, hasCurve ? 1 : 0);
+    if (hasCurve && settings.curve !== lastCurve) {
+      lastCurve = settings.curve;
+      gl.activeTexture(gl.TEXTURE9);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA32F,
+        CURVE.LUT_SIZE,
+        1,
+        0,
+        gl.RGBA,
+        gl.FLOAT,
+        buildCurveLut(settings.curve),
+      );
+      gl.activeTexture(gl.TEXTURE0);
+    }
 
     const frame = orientedDims(geometry.orient, imgW, imgH);
     const rad = (geometry.angle * Math.PI) / 180;
@@ -434,6 +463,22 @@ export function createRenderer(canvas) {
   createTexture(gl.TEXTURE5, gl.LINEAR);
   createTexture(gl.TEXTURE6, gl.LINEAR);
   createTexture(gl.TEXTURE7, gl.LINEAR);
+  // Tone-curve LUT (unit 9): RGBA32F sampled with texelFetch, so NEAREST —
+  // float linear filtering is an extension, and the shader mixes between
+  // entries by hand to match the CPU export exactly. Seeded with the
+  // identity table so the texture is complete before the first edit.
+  createTexture(gl.TEXTURE9, gl.NEAREST);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA32F,
+    CURVE.LUT_SIZE,
+    1,
+    0,
+    gl.RGBA,
+    gl.FLOAT,
+    buildCurveLut(ZERO_CURVE),
+  );
   // Image textures: integer formats are non-filterable, NEAREST is
   // mandatory (the shader bilinears by hand). Unit 8 holds the zoom
   // detail, unit 0 the fit preview — created last so TEXTURE0 stays the

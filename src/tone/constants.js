@@ -338,5 +338,54 @@ export const NR = {
   CHROMA_GF_EPS: 1e-3,
 };
 
+/**
+ * Tone curve: master + per-channel R/G/B point curves over the final
+ * display-referred (sRGB-encoded) values — the domain ACR/Lightroom define
+ * their point curve on and the one RawTherapee bakes into its tone-curve
+ * LUT, so the classic 0–255 preset points apply verbatim and the curve's
+ * x-axis matches the histogram users see. Interpolation is the
+ * Fritsch–Carlson monotone cubic (darktable's "monotonic spline"): no
+ * overshoot or oscillation no matter where the nodes sit. Channel curves
+ * apply first (full effect — they exist to shift color), then the master
+ * curve, whose induced saturation is controlled by the REFINE SATURATION
+ * slider (ACR 15.4's "Refine"): 1 applies the master per channel like a
+ * classic RGB curve, 0 applies it as the hue/sat-preserving luminance
+ * ratio curve(Y)/Y (darktable rgb curve "preserve colors: luminance",
+ * RawTherapee's Luminance mode), in between blends linearly.
+ */
+export const CURVE = {
+  /** Entries in the per-channel curve LUT — shared by the RGBA32F shader
+   *  texture and the CPU export so the two sample identical tables. */
+  LUT_SIZE: 1024,
+  /** Control points per channel the UI and persistence allow. */
+  MAX_POINTS: 16,
+  /** Luma floor below which the luminance-ratio application falls back to
+   *  the curved luma itself (near black, hue is meaningless anyway). */
+  LUMA_EPS: 1e-4,
+  /** Classic ACR/Lightroom point-curve presets (XMP crs:ToneCurve values,
+   *  0–255 both axes), normalized. Both pin middle gray at (128,128) and
+   *  pull shadows down harder than they lift highlights. */
+  LINEAR: [
+    [0, 0],
+    [1, 1],
+  ],
+  MEDIUM_CONTRAST: [
+    [0, 0],
+    [32, 22],
+    [64, 56],
+    [128, 128],
+    [192, 196],
+    [255, 255],
+  ].map(([x, y]) => [x / 255, y / 255]),
+  STRONG_CONTRAST: [
+    [0, 0],
+    [32, 16],
+    [64, 50],
+    [128, 128],
+    [192, 202],
+    [255, 255],
+  ].map(([x, y]) => [x / 255, y / 255]),
+};
+
 /** Rec.709 luma weights used for the shadows/highlights masks. */
 export const LUMA = [0.2126, 0.7152, 0.0722];

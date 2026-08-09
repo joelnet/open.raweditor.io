@@ -1,5 +1,7 @@
 import { ZERO_SETTINGS } from "./tone/tone-math.js";
 import { ZERO_GEOMETRY } from "./tone/geometry.js";
+import { ZERO_CURVE } from "./tone/curve.js";
+import { CURVE } from "./tone/constants.js";
 import {
   ZERO_MASK_ADJUSTMENTS,
   maskGroupFromLegacy,
@@ -16,7 +18,9 @@ export const EDIT_SCHEMA_VERSION = 2;
 export const MAX_EDIT_RECORDS = 100;
 export const RETENTION_MONTHS = 6;
 
-const SETTING_KEYS = Object.keys(ZERO_SETTINGS).filter((k) => k !== "masks");
+const SETTING_KEYS = Object.keys(ZERO_SETTINGS).filter(
+  (k) => k !== "masks" && k !== "curve",
+);
 const MASK_NUM_KEYS = [
   "x",
   "y",
@@ -244,6 +248,48 @@ export function cloneGroup(input) {
 }
 
 /**
+ * Sanitize one channel's curve control points: finite pairs only, clamped
+ * to [0, 1], sorted by x, capped at the point budget. Anything that
+ * doesn't leave at least two points falls back to null (= identity).
+ * @param {unknown} input
+ * @returns {[number, number][] | null}
+ */
+function clonePoints(input) {
+  if (!Array.isArray(input)) return null;
+  /** @type {[number, number][]} */
+  const points = [];
+  for (const p of input) {
+    if (!Array.isArray(p)) continue;
+    const [x, y] = p;
+    if (typeof x !== "number" || !Number.isFinite(x)) continue;
+    if (typeof y !== "number" || !Number.isFinite(y)) continue;
+    points.push([Math.min(Math.max(x, 0), 1), Math.min(Math.max(y, 0), 1)]);
+  }
+  points.sort((a, b) => a[0] - b[0]);
+  if (points.length < 2) return null;
+  return points.slice(0, CURVE.MAX_POINTS);
+}
+
+/**
+ * Field-by-field sanitized copy of the tone curve; missing or malformed
+ * channels fall back to identity, so pre-curve records load unchanged.
+ * @param {unknown} input
+ * @returns {import("./tone/curve.js").ToneCurve}
+ */
+function cloneCurve(input) {
+  const raw =
+    input && typeof input === "object"
+      ? /** @type {Record<string, unknown>} */ (input)
+      : {};
+  return {
+    master: clonePoints(raw.master) ?? ZERO_CURVE.master,
+    r: clonePoints(raw.r) ?? ZERO_CURVE.r,
+    g: clonePoints(raw.g) ?? ZERO_CURVE.g,
+    b: clonePoints(raw.b) ?? ZERO_CURVE.b,
+  };
+}
+
+/**
  * @param {unknown} input
  * @param {boolean} [legacyMasks] treat `masks` as v1 single shapes and lift
  *   each into a group of one add component (identical rendered result)
@@ -261,6 +307,7 @@ export function cloneSettings(input, legacyMasks = false) {
     /** @type {unknown} */ (ZERO_SETTINGS)
   );
   for (const key of SETTING_KEYS) out[key] = finite(raw[key], zero[key]);
+  settings.curve = cloneCurve(raw.curve);
   const rawMasks = Array.isArray(raw.masks) ? raw.masks : [];
   const masks = legacyMasks
     ? rawMasks

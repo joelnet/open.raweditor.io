@@ -4,9 +4,11 @@
 // readouts.
 
 import { SECTIONS, GRADE_KEYS, HSL_KEYS, EFFECTS_KEYS } from "../state.js";
+import { ZERO_SETTINGS } from "../tone/tone-math.js";
 import { buildGrading } from "./grading.js";
 import { buildMixer } from "./mixer.js";
 import { buildEffects } from "./effects.js";
+import { buildCurve } from "./curve.js";
 import { onDoubleTap } from "./double-tap.js";
 
 const MAX_EXPORT_DIMENSION = 32768;
@@ -166,6 +168,17 @@ export function buildPanel(
       buildGrading(section, store, (def) => makeRow(def, entry));
     } else if (sectionDef.mixer) {
       buildMixer(section, (def) => makeRow(def, entry));
+    } else if (sectionDef.curve) {
+      const { buttons } = buildCurve(
+        section,
+        store,
+        (def) => makeRow(def, entry),
+        onAdjustmentChange,
+      );
+      for (const btn of buttons) {
+        btn.disabled = true;
+        entry.buttons.push(btn);
+      }
     } else if (sectionDef.effects) {
       const { toggle } = buildEffects(section, store, (def) =>
         makeRow(def, entry),
@@ -405,6 +418,12 @@ export function buildPanel(
       const out = { ...settings };
       for (const sec of SECTIONS) {
         if (!bypassed.has(sec.title)) continue;
+        if (sec.curve) {
+          // the curve is points, not a scalar — bypass means identity
+          out.curve = ZERO_SETTINGS.curve;
+          out.curveSat = ZERO_SETTINGS.curveSat;
+          continue;
+        }
         const keys = sec.grading
           ? GRADE_KEYS
           : sec.mixer

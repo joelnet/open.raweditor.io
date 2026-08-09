@@ -22,6 +22,11 @@ machine: decoding, editing, and export all happen client-side.
   edits render at full frame rate on a 16-bit linear-light texture
 - **White balance**: temp / tint, with auto (gray-world + near-gray refinement)
 - **Tone**: exposure, contrast, highlights, shadows, whites, blacks, with auto
+- **Tone curve**: master and per-channel R/G/B point curves (monotone
+  Fritsch–Carlson spline, so nodes never overshoot), the classic Linear /
+  Medium / Strong Contrast presets, and an ACR-style Refine Saturation
+  slider that blends the master curve between per-channel application and
+  a hue-preserving luminance ratio
 - **Color**: vibrance (inverse-saturation weighted, velvia-style) and
   saturation (chroma scale around Rec.709 luma)
 - **Noise reduction**: separate luminance (multi-band à trous wavelet
@@ -56,10 +61,12 @@ public/      copied verbatim into the build (icons, _headers, share worker)
 ```
 
 The tone pipeline (white balance → exposure → whites/blacks → contrast →
-highlights/shadows → vibrance/saturation → sRGB encode) is implemented twice:
-once in GLSL for the preview and histogram, once in JS for the full-res
-export. Both interpolate their constants from `src/tone/constants.js` so they
-cannot drift apart.
+highlights/shadows → vibrance/saturation → sRGB encode → tone curve) is
+implemented twice: once in GLSL for the preview and histogram, once in JS for
+the full-res export. Both interpolate their constants from
+`src/tone/constants.js` so they cannot drift apart; the tone curve
+additionally shares its baked spline LUT (`src/tone/curve.js`) between the
+shader texture and the export worker.
 
 ### How a file gets in
 
