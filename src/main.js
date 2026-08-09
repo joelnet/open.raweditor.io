@@ -302,7 +302,7 @@ async function openFile(file) {
   masks.setEnabled(false);
   status.setFile(`Decoding ${file.name}…`);
   status.setProgress("");
-  status.setBusy(true);
+  const activityId = status.startActivity("OPENING PHOTO", file.name);
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const editKeyPromise = editKeyForFile(file, bytes);
@@ -386,7 +386,7 @@ async function openFile(file) {
     if (!currentFile) dropzone.setVisible(true);
   } finally {
     opening = false;
-    status.clearProgressBar();
+    status.clearActivity(activityId);
     if (currentFile) {
       panel.setEnabled(true);
       presets.setEnabled(true);
@@ -408,12 +408,17 @@ async function onExport(opts) {
   const cropRect = crop.rect();
   const geometry = crop.geometry();
   panel.setExportBusy(true, format);
+  const formatLabel = format === "jpeg" ? "JPG" : format.toUpperCase();
+  status.setProgress("Export: decoding full resolution…");
+  const activityId = status.startActivity(
+    `EXPORTING ${formatLabel}`,
+    "Decoding full resolution",
+  );
   try {
-    status.setProgress("Export: decoding full resolution…");
-    status.setBusy(true);
     const bytes = new Uint8Array(await file.arrayBuffer());
     const { image } = await decoder.decode(bytes, {});
     status.setProgress("Export: applying tone…");
+    status.setActivityDetail(activityId, "Applying tone");
     const blob = await exporter.exportImage(
       image,
       settings,
@@ -427,7 +432,11 @@ async function onExport(opts) {
         status.setProgress(
           `Export: applying tone… ${Math.round(ratio * 100)}%`,
         );
-        status.setProgressValue(ratio);
+        status.setActivityProgress(
+          activityId,
+          ratio,
+          `Applying tone · ${Math.round(ratio * 100)}%`,
+        );
       },
     );
     const ext =
@@ -444,7 +453,7 @@ async function onExport(opts) {
     );
   } finally {
     panel.setExportBusy(false);
-    status.clearProgressBar();
+    status.clearActivity(activityId);
   }
 }
 
@@ -507,7 +516,7 @@ async function addSkyMask() {
   skyBusy = true;
   masks.setSkyBusy(true);
   status.setProgress("Detecting sky…");
-  status.setBusy(true);
+  const activityId = status.startActivity("DETECTING SKY");
   try {
     const result = await sky.detect(previewImage, crop.geometry());
     if (file !== currentFile) return; // a different image landed meanwhile
@@ -530,7 +539,7 @@ async function addSkyMask() {
   } finally {
     skyBusy = false;
     masks.setSkyBusy(false);
-    status.setBusy(false);
+    status.clearActivity(activityId);
   }
 }
 // Auto WB / auto tone: image statistics over the cropped preview. Auto tone
@@ -606,7 +615,6 @@ function onClose() {
   store.set({ ...ZERO_SETTINGS });
   status.setFile("No file loaded: drop a photo");
   status.setProgress("");
-  status.clearProgressBar();
 }
 
 const panel = buildPanel(panelScroll, store, {

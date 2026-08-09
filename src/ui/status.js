@@ -1,5 +1,5 @@
-// Bottom status bar: file/details on the left, progress/errors on the right,
-// plus a thin progress bar pinned to the top edge for long-running work.
+// Bottom status bar plus the shared, always-visible activity indicator used
+// for work that can take long enough that the user needs to wait.
 
 export function createStatus() {
   const fileEl = /** @type {HTMLElement} */ (
@@ -8,18 +8,57 @@ export function createStatus() {
   const progressEl = /** @type {HTMLElement} */ (
     document.getElementById("status-progress")
   );
-  const barEl = /** @type {HTMLElement} */ (
-    document.getElementById("status-bar-progress")
+  const appEl = /** @type {HTMLElement} */ (document.getElementById("app"));
+  const activityEl = /** @type {HTMLElement} */ (
+    document.getElementById("activity-indicator")
   );
-  const fillEl = /** @type {HTMLElement} */ (
-    document.getElementById("status-bar-progress-fill")
+  const activityLabelEl = /** @type {HTMLElement} */ (
+    document.getElementById("activity-label")
   );
+  const activityDetailEl = /** @type {HTMLElement} */ (
+    document.getElementById("activity-detail")
+  );
+  const progressBarEl = /** @type {HTMLElement} */ (
+    document.getElementById("activity-progress")
+  );
+  const progressFillEl = /** @type {HTMLElement} */ (
+    document.getElementById("activity-progress-fill")
+  );
+  /** @type {Map<number, { label: string, detail: string, value: number | null }>} */
+  const activities = new Map();
+  let nextActivityId = 0;
 
-  const clearBar = () => {
-    barEl.classList.remove("visible", "busy");
-    barEl.removeAttribute("aria-valuenow");
-    barEl.setAttribute("aria-hidden", "true");
-    fillEl.style.width = "0";
+  const renderActivity = () => {
+    let current = null;
+    for (const activity of activities.values()) current = activity;
+    if (!current) {
+      activityEl.hidden = true;
+      progressBarEl.classList.remove("busy");
+      progressBarEl.removeAttribute("aria-valuenow");
+      progressFillEl.style.width = "0";
+      appEl.removeAttribute("aria-busy");
+      return;
+    }
+    if (activityLabelEl.textContent !== current.label) {
+      activityLabelEl.textContent = current.label;
+    }
+    if (activityDetailEl.textContent !== current.detail) {
+      activityDetailEl.textContent = current.detail;
+    }
+    activityEl.hidden = false;
+    appEl.setAttribute("aria-busy", "true");
+    if (current.value === null) {
+      progressBarEl.classList.add("busy");
+      progressBarEl.removeAttribute("aria-valuenow");
+      progressFillEl.style.width = "";
+      return;
+    }
+    progressBarEl.classList.remove("busy");
+    progressBarEl.setAttribute(
+      "aria-valuenow",
+      String(Math.round(current.value * 100)),
+    );
+    progressFillEl.style.width = `${current.value * 100}%`;
   };
 
   return {
@@ -37,32 +76,42 @@ export function createStatus() {
     setError(text) {
       progressEl.classList.add("error");
       progressEl.textContent = text;
-      clearBar();
     },
-    /** Indeterminate progress: animated sweep across the bar.
-     * @param {boolean} busy */
-    setBusy(busy) {
-      if (busy) {
-        barEl.classList.add("visible", "busy");
-        barEl.setAttribute("aria-hidden", "false");
-        barEl.removeAttribute("aria-valuenow");
-        fillEl.style.width = "";
-      } else {
-        clearBar();
-      }
+    /** Show the shared indicator with indeterminate progress.
+     * @param {string} label
+     * @param {string} [detail]
+     * @returns {number} activity id */
+    startActivity(label, detail = "Please wait") {
+      const id = ++nextActivityId;
+      activities.set(id, { label, detail, value: null });
+      renderActivity();
+      return id;
     },
-    /** Determinate progress: clamped to 0..1. Switches off busy mode.
-     * @param {number} value */
-    setProgressValue(value) {
+    /** Update the text while an indeterminate activity is running.
+     * @param {number} id
+     * @param {string} detail */
+    setActivityDetail(id, detail) {
+      const activity = activities.get(id);
+      if (!activity) return;
+      activity.detail = detail;
+      renderActivity();
+    },
+    /** Switch the shared indicator to determinate progress.
+     * @param {number} id
+     * @param {number} value
+     * @param {string} [detail] */
+    setActivityProgress(id, value, detail) {
+      const activity = activities.get(id);
+      if (!activity) return;
       const clamped = Math.max(0, Math.min(1, value));
-      barEl.classList.add("visible");
-      barEl.classList.remove("busy");
-      barEl.setAttribute("aria-hidden", "false");
-      barEl.setAttribute("aria-valuenow", String(Math.round(clamped * 100)));
-      fillEl.style.width = `${clamped * 100}%`;
+      activity.value = clamped;
+      if (detail) activity.detail = detail;
+      renderActivity();
     },
-    clearProgressBar() {
-      clearBar();
+    /** @param {number} id */
+    clearActivity(id) {
+      activities.delete(id);
+      renderActivity();
     },
   };
 }

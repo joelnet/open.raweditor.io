@@ -5,7 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#141927" />
     <link rel="icon" href="/favicon.ico" sizes="48x48" />
-    <link rel="icon" type="image/png" href="/icons/icon-192.png" sizes="192x192" />
+    <link
+      rel="icon"
+      type="image/png"
+      href="/icons/icon-192.png"
+      sizes="192x192"
+    />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>Open Raw Editor</title>
     <link rel="stylesheet" href="/src/styles.css" />
@@ -48,14 +53,26 @@
         </div>
       </aside>
     </main>
-    <div
-      id="status-bar-progress"
-      role="progressbar"
-      aria-hidden="true"
-      aria-valuemin="0"
-      aria-valuemax="100"
-    >
-      <div id="status-bar-progress-fill"></div>
+    <div id="activity-indicator" hidden>
+      <div class="activity-copy">
+        <span
+          id="activity-label"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          >WORKING</span
+        >
+        <span id="activity-detail" aria-hidden="true">Please wait</span>
+      </div>
+      <div
+        id="activity-progress"
+        role="progressbar"
+        aria-label="Operation progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+      >
+        <div id="activity-progress-fill"></div>
+      </div>
     </div>
     <footer id="statusbar">
       <span id="status-file">No file loaded</span>

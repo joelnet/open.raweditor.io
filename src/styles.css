@@ -1553,36 +1553,70 @@ button:disabled {
   }
 }
 
-/* Lives at the very top of the viewport so it's always visible during
-   decode/export — independent of the statusbar (which is hidden on mobile). */
-#status-bar-progress {
+/* Shared activity state for decoding and export. It sits above the app so
+   the same compact signal stays visible in desktop and stacked mobile UI. */
+#activity-indicator {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  z-index: 11;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  z-index: 20;
+  width: min(360px, calc(100vw - 24px));
+  padding: 10px 12px 9px;
+  transform: translateX(-50%);
+  color: var(--text);
+  background: color-mix(in oklch, var(--panel) 98%, transparent);
+  border: 1px solid var(--panel-edge);
+  border-radius: 5px;
+  box-shadow: 0 10px 30px color-mix(in oklch, var(--bg-deep) 55%, transparent);
   pointer-events: none;
-  opacity: 0;
+}
+
+#activity-indicator[hidden] {
+  display: none;
+}
+
+.activity-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+#activity-label {
+  flex: 0 0 auto;
+  color: var(--accent-blue);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+#activity-detail {
+  min-width: 0;
   overflow: hidden;
-  transition: opacity 120ms ease-out;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-#status-bar-progress.visible {
-  opacity: 1;
+#activity-progress {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  background: var(--bg-deep);
+  border-radius: 2px;
 }
 
-#status-bar-progress-fill {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
+#activity-progress-fill {
+  height: 100%;
   width: 0;
   background: var(--accent-blue);
   transition: width 160ms ease-out;
 }
 
-#status-bar-progress.busy #status-bar-progress-fill {
+#activity-progress.busy #activity-progress-fill {
   width: 40%;
   background: linear-gradient(
     90deg,
@@ -1604,19 +1638,10 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #status-bar-progress.busy #status-bar-progress-fill {
+  #activity-progress.busy #activity-progress-fill {
     width: 100%;
     background: var(--accent-blue);
-    animation: status-progress-pulse 1.6s ease-in-out infinite;
-  }
-  @keyframes status-progress-pulse {
-    0%,
-    100% {
-      opacity: 0.35;
-    }
-    50% {
-      opacity: 1;
-    }
+    animation: none;
   }
 }
 
