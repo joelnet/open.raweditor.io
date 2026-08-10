@@ -778,7 +778,16 @@ test("glow: zero amount is identity for any pixel", () => {
     [0.3, 0.6, 0.9],
     [1, 1, 1],
   ]) {
-    const out = applyGlow(px[0], px[1], px[2], 0.4, 0.5, 0.6, ZERO_SETTINGS, null);
+    const out = applyGlow(
+      px[0],
+      px[1],
+      px[2],
+      0.4,
+      0.5,
+      0.6,
+      ZERO_SETTINGS,
+      null,
+    );
     assert.deepEqual(out, px, `px ${px}`);
   }
 });
