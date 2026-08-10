@@ -772,37 +772,25 @@ test("sampleGlow: texel centers return texels, midpoints average, edges clamp", 
   near(sampleGlow(glow, 1, 1), [0.3, 0.2, 0.1], "far corner clamps");
 });
 
-test("glow: zero amount is identity for any brightness/pixel", () => {
-  for (const b of [0, 0.5, 1]) {
-    const s = settings({ glowBrightness: b });
-    for (const px of [
-      [0, 0, 0],
-      [0.3, 0.6, 0.9],
-      [1, 1, 1],
-    ]) {
-      const out = applyGlow(px[0], px[1], px[2], 0.4, 0.5, 0.6, s, null);
-      assert.deepEqual(out, px, `brightness ${b} px ${px}`);
-    }
+test("glow: zero amount is identity for any pixel", () => {
+  for (const px of [
+    [0, 0, 0],
+    [0.3, 0.6, 0.9],
+    [1, 1, 1],
+  ]) {
+    const out = applyGlow(px[0], px[1], px[2], 0.4, 0.5, 0.6, ZERO_SETTINGS, null);
+    assert.deepEqual(out, px, `px ${px}`);
   }
 });
 
 test("glow: bright layer lifts midtones, dark layer adds density", () => {
-  const s = settings({ glowAmount: 1, glowBrightness: 1 });
+  const s = settings({ glowAmount: 1 });
   const [mid] = applyGlow(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, s, null);
   assert.ok(mid > 0.5, `midtone must glow brighter (${mid})`);
-  // the S-curve crushes a dark blurred layer below the pixel; the normal
-  // blend then deepens the shadows (the Orton density) instead of hazing
-  const dark = settings({ glowAmount: 1, glowBrightness: 0 });
-  const [shadow] = applyGlow(0.2, 0.2, 0.2, 0.04, 0.04, 0.04, dark, null);
+  // the dramatic curve crushes a dark blurred layer below the pixel; the
+  // normal blend then deepens the shadows (the Orton density), no haze
+  const [shadow] = applyGlow(0.2, 0.2, 0.2, 0.04, 0.04, 0.04, s, null);
   assert.ok(shadow < 0.2, `dark blur must deepen shadows (${shadow})`);
-});
-
-test("glow: brightness raises the glow layer (stronger lift at same amount)", () => {
-  const s0 = settings({ glowAmount: 1, glowBrightness: 0 });
-  const s1 = settings({ glowAmount: 1, glowBrightness: 1 });
-  const [flat] = applyGlow(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, s0, null);
-  const [boosted] = applyGlow(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, s1, null);
-  assert.ok(boosted > flat, `${boosted} <= ${flat}`);
 });
 
 test("toneMapRows applies glow between the curve and the display effects", () => {
@@ -817,7 +805,6 @@ test("toneMapRows applies glow between the curve and the display effects", () =>
   const glow = { data: new Float32Array([0.2, 0.3, 0.4, 1]), w: 1, h: 1 };
   const s = settings({
     glowAmount: 0.8,
-    glowBrightness: 0.7,
     exposure: 0.5,
     contrast: 0.2,
   });
@@ -843,7 +830,7 @@ test("toneMapRows: a missing glow plane keeps the GLOW sliders a no-op", () => {
     0, 0, 0, 65535, 65535, 65535, 11796, 23593, 35389, 6553, 6553, 6553,
   ]);
   const image = { data, width, height, colors: 3, bits: 16 };
-  const s = settings({ glowAmount: 1, glowBrightness: 1 });
+  const s = settings({ glowAmount: 1 });
   const out = new Uint8ClampedArray(width * height * 4);
   toneMapRows(image, s, out, 0, height); // no glow passed
   for (let p = 0; p < 4; p++) {

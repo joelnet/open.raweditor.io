@@ -55,7 +55,7 @@ import {
  *             gradeBalance: number,
  *             invert: number, grainAmount: number, grainSize: number,
  *             grainMidtones: number, noise: number,
- *             glowAmount: number, glowBrightness: number,
+ *             glowAmount: number,
  *             lumaNoise: number, colorNoise: number, noiseDetail: number,
  *             curve: import("./curve.js").ToneCurve, curveSat: number,
  *             masks: readonly import("./mask-math.js").MaskGroup[]
@@ -124,9 +124,6 @@ export const ZERO_SETTINGS = Object.freeze({
   grainMidtones: 1,
   noise: 0,
   glowAmount: 0,
-  // glow brightness default 50 (half screen-boost) — only shapes the glow
-  // layer when Amount > 0, so this stays an identity setting
-  glowBrightness: 0.5,
   // NOISE REDUCTION: off by default. noiseDetail sits at 0.5 (UI 50, the
   // Lightroom default) but only matters when lumaNoise > 0, so this stays an
   // identity setting.
@@ -501,9 +498,9 @@ export function sampleGlow(glow, u, v) {
  * GLOW (Orton effect), the classic Photoshop recipe: push the blurred
  * glow sample through the cheap global subset of the tone chain (WB →
  * exposure → whites/blacks → contrast → sRGB encode → tone curve) so the
- * glow follows the edit, apply a dramatic S-curve (crushes the blurred
- * shadows so the mix adds density, not haze), screen-boost by GLOW
- * BRIGHTNESS, then blend normally over the display-referred pixel by
+ * glow follows the edit, apply a dramatic contrast curve (crushes the
+ * blurred shadows so the mix adds density, not haze), then blend
+ * normally over the display-referred pixel by
  * GLOW AMOUNT. Highlights/shadows, masks and the color stages are
  * skipped on the glow layer on purpose — it is low-frequency and blended
  * at low opacity; WB and exposure are what must not mismatch. Mirrors
@@ -555,11 +552,6 @@ export function applyGlow(dr, dg, db, gr, gg, gb, s, curveLut) {
   gr = gainR / (gainR + Math.pow(1 - gr, dm));
   gg = gainG / (gainG + Math.pow(1 - gg, dm));
   gb = gainB / (gainB + Math.pow(1 - gb, dm));
-  // screen self-blend (mix(g, 1-(1-g)², B) = g + B·g·(1-g)): extra layer
-  // brightness, scaled by GLOW BRIGHTNESS
-  gr += s.glowBrightness * gr * (1 - gr);
-  gg += s.glowBrightness * gg * (1 - gg);
-  gb += s.glowBrightness * gb * (1 - gb);
   const a = s.glowAmount * EFFECTS.GLOW_OPACITY_MAX;
   return [dr + (gr - dr) * a, dg + (gg - dg) * a, db + (gb - db) * a];
 }

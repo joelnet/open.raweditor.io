@@ -115,7 +115,6 @@ uniform float u_grainSize;      // [-1, 1] (coarseness)
 uniform float u_grainMidtones;  // [0, 1] — darktable midtones bias (×100)
 uniform float u_noise;          // [0, 1] — adds chromatic noise
 uniform float u_glowAmount;     // [0, 1] — Orton glow blend
-uniform float u_glowBrightness; // [0, 1] — glow layer screen boost
 
 // NOISE REDUCTION (presence prepass, step 0)
 uniform float u_lumaNoise;      // [0, 1] — multi-band luminance NR amount
@@ -233,8 +232,8 @@ vec3 softLight(vec3 a, vec3 b) {
 // the blurred copy (u_glowT, linear light) runs through the cheap global
 // subset of the tone chain (WB → exposure → whites/blacks → contrast →
 // sRGB encode → tone curve) so the glow follows the edit, gets a dramatic
-// S-curve (crushes the blurred shadows so the mix adds density, not
-// haze), a screen self-blend scaled by GLOW BRIGHTNESS, and blends
+// contrast curve (crushes the blurred shadows so the mix adds density,
+// not haze), and blends
 // normally over the display pixel by GLOW AMOUNT. Highlights/shadows,
 // masks and the color stages are skipped on the glow layer on purpose —
 // it is low-frequency and blended at low opacity; WB and exposure are
@@ -260,8 +259,6 @@ vec3 applyGlow(vec3 display, vec3 g) {
   // xᵃ/(xᵃ+(1-x)ᵃ) crushes the blurred shadows and blows the brights
   vec3 gain = pow(gd, vec3(${f(EFFECTS.GLOW_DRAMA)}));
   gd = gain / (gain + pow(1.0 - gd, vec3(${f(EFFECTS.GLOW_DRAMA)})));
-  // screen self-blend: extra layer brightness, scaled by GLOW BRIGHTNESS
-  gd = mix(gd, 1.0 - (1.0 - gd) * (1.0 - gd), u_glowBrightness);
   float a = u_glowAmount * ${f(EFFECTS.GLOW_OPACITY_MAX)};
   return mix(display, gd, a);
 }

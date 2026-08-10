@@ -50,7 +50,6 @@ const UNIFORMS = /** @type {const} */ ([
   "grainMidtones",
   "noise",
   "glowAmount",
-  "glowBrightness",
   "lumaNoise",
   "colorNoise",
   "noiseDetail",
