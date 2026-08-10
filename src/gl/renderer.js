@@ -49,6 +49,8 @@ const UNIFORMS = /** @type {const} */ ([
   "grainSize",
   "grainMidtones",
   "noise",
+  "glowAmount",
+  "glowBrightness",
   "lumaNoise",
   "colorNoise",
   "noiseDetail",
@@ -80,9 +82,11 @@ function compileShader(gl, type, source) {
 /**
  * Per-image presence aux from spatial-worker.js: interleaved à trous
  * detail planes (c1, c2, c3, clarity base), the Richardson-Lucy sharpening
- * delta, the refined haze amount, and the estimated airlight color.
+ * delta, the refined haze amount, the estimated airlight color, and the
+ * packed low-res glow (Orton) plane at its own dimensions.
  * @typedef {{ detail: Float32Array, sharpenD: Float32Array, dehazeD: Float32Array,
  *             lightBalanceW: Float32Array, chroma: Float32Array,
+ *             glow: { data: Float32Array, w: number, h: number },
  *             airlight: [number, number, number],
  *             width: number, height: number }} PresenceAux
  */
@@ -157,13 +161,15 @@ export function createRenderer(canvas) {
   const locImage = gl.getUniformLocation(program, "u_image");
   gl.uniform1i(locImage, 0);
   // unit 1 is the histogram readback target; spatial aux lives on 2, 3, 5,
-  // 6, 7; the zoom detail texture on 8; the tone-curve LUT on 9
+  // 6, 7; the zoom detail texture on 8; the tone-curve LUT on 9; the
+  // low-res glow plane on 10
   gl.uniform1i(gl.getUniformLocation(program, "u_detail"), 2);
   gl.uniform1i(gl.getUniformLocation(program, "u_dehazeD"), 3);
   gl.uniform1i(gl.getUniformLocation(program, "u_sharpenD"), 5);
   gl.uniform1i(gl.getUniformLocation(program, "u_lightBalanceW"), 6);
   gl.uniform1i(gl.getUniformLocation(program, "u_chromaD"), 7);
   gl.uniform1i(gl.getUniformLocation(program, "u_curveLut"), 9);
+  gl.uniform1i(gl.getUniformLocation(program, "u_glowT"), 10);
   // brush-mask coverage array lives on unit 4
   gl.uniform1i(gl.getUniformLocation(program, "u_brushMask"), 4);
   gl.uniform1i(locHasAux, 0);
@@ -454,15 +460,17 @@ export function createRenderer(canvas) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   };
 
-  // Presence aux textures (preview-res, sampled by normalized UV): LINEAR —
-  // half-float formats are filterable in core WebGL2 — so they stay smooth
-  // when magnified or under the higher-res detail texture. Bound once;
-  // texImage2D in setAux re-allocates per image.
+  // Presence aux textures (preview-res except the small glow plane on 10,
+  // all sampled by normalized UV): LINEAR — half-float formats are
+  // filterable in core WebGL2 — so they stay smooth when magnified or
+  // under the higher-res detail texture. Bound once; texImage2D in setAux
+  // re-allocates per image.
   createTexture(gl.TEXTURE2, gl.LINEAR);
   createTexture(gl.TEXTURE3, gl.LINEAR);
   createTexture(gl.TEXTURE5, gl.LINEAR);
   createTexture(gl.TEXTURE6, gl.LINEAR);
   createTexture(gl.TEXTURE7, gl.LINEAR);
+  createTexture(gl.TEXTURE10, gl.LINEAR);
   // Tone-curve LUT (unit 9): RGBA32F sampled with texelFetch, so NEAREST —
   // float linear filtering is an extension, and the shader mixes between
   // entries by hand to match the CPU export exactly. Seeded with the
@@ -647,6 +655,19 @@ export function createRenderer(canvas) {
         gl.RG,
         gl.FLOAT,
         aux.chroma,
+      );
+      // the glow plane rides on its own low-res grid, not the preview's
+      gl.activeTexture(gl.TEXTURE10);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA16F,
+        aux.glow.w,
+        aux.glow.h,
+        0,
+        gl.RGBA,
+        gl.FLOAT,
+        aux.glow.data,
       );
       gl.activeTexture(gl.TEXTURE0);
       gl.uniform3f(

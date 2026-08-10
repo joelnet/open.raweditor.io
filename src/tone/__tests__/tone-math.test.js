@@ -5,6 +5,8 @@ import {
   ZERO_SETTINGS,
   applyTonePixel,
   applyDisplayEffects,
+  applyGlow,
+  sampleGlow,
   srgbEncode,
   srgbDecode,
   toneMapRows,
@@ -744,4 +746,112 @@ test("toneMapRows handles 4-channel input and row ranges", () => {
   assert.equal(out[0], 0); // top row untouched
   assert.ok(out[2 * 4] > 0); // bottom row written
   assert.equal(out[2 * 4 + 3], 255);
+});
+
+// --- GLOW (Orton effect) -------------------------------------------------
+
+test("sampleGlow: texel centers return texels, midpoints average, edges clamp", () => {
+  const glow = {
+    // prettier-ignore
+    data: new Float32Array([
+      0.1, 0.2, 0.3, 1,  0.5, 0.6, 0.7, 1,
+      0.9, 0.8, 0.7, 1,  0.3, 0.2, 0.1, 1,
+    ]),
+    w: 2,
+    h: 2,
+  };
+  const near = (got, want, msg) =>
+    got.forEach((v, i) =>
+      assert.ok(Math.abs(v - want[i]) < 1e-6, `${msg}[${i}]: ${v}`),
+    );
+  near(sampleGlow(glow, 0.25, 0.25), [0.1, 0.2, 0.3], "texel 0 center");
+  near(sampleGlow(glow, 0.75, 0.75), [0.3, 0.2, 0.1], "texel 3 center");
+  near(sampleGlow(glow, 0.5, 0.25), [0.3, 0.4, 0.5], "top midpoint");
+  near(sampleGlow(glow, 0.5, 0.5), [0.45, 0.45, 0.45], "plane center");
+  near(sampleGlow(glow, 0, 0), [0.1, 0.2, 0.3], "corner clamps");
+  near(sampleGlow(glow, 1, 1), [0.3, 0.2, 0.1], "far corner clamps");
+});
+
+test("glow: zero amount is identity for any brightness/pixel", () => {
+  for (const b of [0, 0.5, 1]) {
+    const s = settings({ glowBrightness: b });
+    for (const px of [
+      [0, 0, 0],
+      [0.3, 0.6, 0.9],
+      [1, 1, 1],
+    ]) {
+      const out = applyGlow(px[0], px[1], px[2], 0.4, 0.5, 0.6, s, null);
+      assert.deepEqual(out, px, `brightness ${b} px ${px}`);
+    }
+  }
+});
+
+test("glow: bright layer lifts midtones, dark layer adds density", () => {
+  const s = settings({ glowAmount: 1, glowBrightness: 1 });
+  const [mid] = applyGlow(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, s, null);
+  assert.ok(mid > 0.5, `midtone must glow brighter (${mid})`);
+  // the S-curve crushes a dark blurred layer below the pixel; the normal
+  // blend then deepens the shadows (the Orton density) instead of hazing
+  const dark = settings({ glowAmount: 1, glowBrightness: 0 });
+  const [shadow] = applyGlow(0.2, 0.2, 0.2, 0.04, 0.04, 0.04, dark, null);
+  assert.ok(shadow < 0.2, `dark blur must deepen shadows (${shadow})`);
+});
+
+test("glow: brightness raises the glow layer (stronger lift at same amount)", () => {
+  const s0 = settings({ glowAmount: 1, glowBrightness: 0 });
+  const s1 = settings({ glowAmount: 1, glowBrightness: 1 });
+  const [flat] = applyGlow(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, s0, null);
+  const [boosted] = applyGlow(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, s1, null);
+  assert.ok(boosted > flat, `${boosted} <= ${flat}`);
+});
+
+test("toneMapRows applies glow between the curve and the display effects", () => {
+  const width = 2;
+  const height = 2;
+  const data = new Uint16Array([
+    0, 0, 0, 65535, 65535, 65535, 11796, 23593, 35389, 6553, 6553, 6553,
+  ]);
+  const image = { data, width, height, colors: 3, bits: 16 };
+  // a 1×1 plane bilinears to the same texel everywhere — the per-pixel
+  // expectation needs no UV mapping
+  const glow = { data: new Float32Array([0.2, 0.3, 0.4, 1]), w: 1, h: 1 };
+  const s = settings({
+    glowAmount: 0.8,
+    glowBrightness: 0.7,
+    exposure: 0.5,
+    contrast: 0.2,
+  });
+  const out = new Uint8ClampedArray(width * height * 4);
+  toneMapRows(image, s, out, 0, height, undefined, undefined, glow);
+  for (let p = 0; p < 4; p++) {
+    const r = data[p * 3] / 65535;
+    const g = data[p * 3 + 1] / 65535;
+    const b = data[p * 3 + 2] / 65535;
+    let [er, eg, eb] = applyTonePixel(r, g, b, s);
+    [er, eg, eb] = applyGlow(er, eg, eb, 0.2, 0.3, 0.4, s, null);
+    const expected = new Uint8ClampedArray([er * 255, eg * 255, eb * 255]);
+    assert.equal(out[p * 4], expected[0], `px ${p} r`);
+    assert.equal(out[p * 4 + 1], expected[1], `px ${p} g`);
+    assert.equal(out[p * 4 + 2], expected[2], `px ${p} b`);
+  }
+});
+
+test("toneMapRows: a missing glow plane keeps the GLOW sliders a no-op", () => {
+  const width = 2;
+  const height = 2;
+  const data = new Uint16Array([
+    0, 0, 0, 65535, 65535, 65535, 11796, 23593, 35389, 6553, 6553, 6553,
+  ]);
+  const image = { data, width, height, colors: 3, bits: 16 };
+  const s = settings({ glowAmount: 1, glowBrightness: 1 });
+  const out = new Uint8ClampedArray(width * height * 4);
+  toneMapRows(image, s, out, 0, height); // no glow passed
+  for (let p = 0; p < 4; p++) {
+    const r = data[p * 3] / 65535;
+    const g = data[p * 3 + 1] / 65535;
+    const b = data[p * 3 + 2] / 65535;
+    const [er, eg, eb] = applyTonePixel(r, g, b, s);
+    const expected = new Uint8ClampedArray([er * 255, eg * 255, eb * 255]);
+    assert.equal(out[p * 4], expected[0], `px ${p} r`);
+  }
 });

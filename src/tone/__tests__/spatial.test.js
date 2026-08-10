@@ -5,6 +5,7 @@ import {
   atrousPass,
   gaussianBlur,
   computeDetailPlanes,
+  computeGlowPlane,
   computeSharpenDeltaPlane,
   computeLightBalanceWeightPlane,
   computeDeltaPlane,
@@ -473,4 +474,51 @@ test("applyPresencePrepass: negative dehaze adds haze (lifts shadows)", () => {
   const before = img.data[dark];
   applyPresencePrepass(img, { ...ZERO_SETTINGS, dehaze: -1 }, 1);
   assert.ok(img.data[dark] > before, "haze re-add must lift dark pixels");
+});
+
+// --- GLOW (Orton) plane --------------------------------------------------
+
+test("computeGlowPlane: flat image stays flat, alpha = 1, dims follow maxEdge", () => {
+  const img = grayImage(64, 48, () => 0.42);
+  const low = downsampleRgbFromImage(img, 16);
+  const flat = low.r[0];
+  const glow = computeGlowPlane(low);
+  assert.equal(glow.w, 16);
+  assert.equal(glow.h, 12);
+  for (let i = 0; i < glow.w * glow.h; i++) {
+    for (let c = 0; c < 3; c++) {
+      assert.ok(
+        Math.abs(glow.data[i * 4 + c] - flat) < EPS,
+        `texel ${i} ch ${c}: ${glow.data[i * 4 + c]}`,
+      );
+    }
+    assert.equal(glow.data[i * 4 + 3], 1, `texel ${i} alpha`);
+  }
+});
+
+test("computeGlowPlane: a point spreads under the frame-relative σ", () => {
+  // buffer at the real GLOW_MAX_EDGE geometry so σ = SIGMA_FRAC × 768 ≈ 3.8
+  const w = SPATIAL.GLOW_MAX_EDGE;
+  const h = 64;
+  const n = w * h;
+  const point = (32 * w + w / 2) * 1;
+  const r = new Float32Array(n);
+  r[point] = 1;
+  const g = new Float32Array(r);
+  const b = new Float32Array(r);
+  const glow = computeGlowPlane({ r, g, b, w, h });
+  const center = glow.data[point * 4];
+  assert.ok(
+    center > 1e-3 && center < 0.05,
+    `σ must smear the point (${center})`,
+  );
+  const neighbor = glow.data[(point + 1) * 4];
+  assert.ok(
+    neighbor > center * 0.5,
+    `neighbor must catch the glow (${neighbor})`,
+  );
+  // interior point, normalized kernel: energy is preserved
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += glow.data[i * 4];
+  assert.ok(Math.abs(sum - 1) < 1e-3, `energy must be preserved (${sum})`);
 });

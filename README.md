@@ -33,6 +33,10 @@ machine: decoding, editing, and export all happen client-side.
   shrinkage) and color (luma-guided chroma denoise) controls, plus a detail
   slider; the per-image analysis runs once in a worker so the sliders stay
   realtime
+- **Effects**: film grain (a darktable port), chromatic noise, photo-negative
+  invert, and an Orton-style **glow** — the classic Photoshop recipe: a
+  blurred copy with a dramatic contrast curve, blended back at low opacity,
+  tracking your white balance and exposure edits
 - **Crop** with aspect presets, orientation flipping, and a custom ratio saved
   across sessions; **zoom / pan** with pinch support
 - **Histogram** (RGB, GPU-computed) and a shot-settings EXIF line

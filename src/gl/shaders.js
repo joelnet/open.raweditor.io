@@ -107,12 +107,15 @@ uniform sampler2D u_curveLut;   // ${CURVE.LUT_SIZE} × 1, bound on unit 9
 uniform int u_hasCurve;
 uniform float u_curveSat;       // [0, 1] — REFINE SATURATION blend
 
-// EFFECTS: display-referred post-step (grain / noise / invert)
+// EFFECTS: display-referred post-step (grain / noise / invert) plus the
+// GLOW (Orton) blend, which sits just before it
 uniform float u_invert;         // 0 or 1 (photo negative)
 uniform float u_grainAmount;    // [-1, 1] (only the magnitude matters)
 uniform float u_grainSize;      // [-1, 1] (coarseness)
 uniform float u_grainMidtones;  // [0, 1] — darktable midtones bias (×100)
 uniform float u_noise;          // [0, 1] — adds chromatic noise
+uniform float u_glowAmount;     // [0, 1] — Orton glow blend
+uniform float u_glowBrightness; // [0, 1] — glow layer screen boost
 
 // NOISE REDUCTION (presence prepass, step 0)
 uniform float u_lumaNoise;      // [0, 1] — multi-band luminance NR amount
@@ -132,6 +135,9 @@ uniform sampler2D u_sharpenD;   // Richardson-Lucy linear-luma delta
 uniform sampler2D u_dehazeD;    // refined dark channel [0, 1]
 uniform sampler2D u_lightBalanceW; // guided tonal weight [0.25, 1]
 uniform sampler2D u_chromaD;    // denoised chroma Co', Cg' (YCoCg)
+uniform sampler2D u_glowT;      // blurred linear RGB for GLOW — unlike the
+                                // planes above it rides its own small grid
+                                // (spatial.js computeGlowPlane), unit 10
 uniform vec3 u_airlight;
 
 // Geometry: orientation (quarter-turns CW) + straighten rotation. v_uv is
@@ -220,6 +226,44 @@ vec3 hueColor(float h) {
 // pegtop soft light: identity at blend 0.5, pins black and white
 vec3 softLight(vec3 a, vec3 b) {
   return (1.0 - 2.0 * b) * a * a + 2.0 * b * a;
+}
+
+// --- GLOW (Orton effect) -------------------------------------------------
+// Mirrors applyGlow() in tone-math.js — the classic Photoshop recipe:
+// the blurred copy (u_glowT, linear light) runs through the cheap global
+// subset of the tone chain (WB → exposure → whites/blacks → contrast →
+// sRGB encode → tone curve) so the glow follows the edit, gets a dramatic
+// S-curve (crushes the blurred shadows so the mix adds density, not
+// haze), a screen self-blend scaled by GLOW BRIGHTNESS, and blends
+// normally over the display pixel by GLOW AMOUNT. Highlights/shadows,
+// masks and the color stages are skipped on the glow layer on purpose —
+// it is low-frequency and blended at low opacity; WB and exposure are
+// what must not mismatch.
+vec3 applyGlow(vec3 display, vec3 g) {
+  g *= exp2(vec3(
+    ${f(TONE.WB_TEMP_EV)} * u_temp,
+    -${f(TONE.WB_TINT_EV)} * u_tint,
+    -${f(TONE.WB_TEMP_EV)} * u_temp
+  ));
+  g *= exp2(u_exposure);
+  float white = 1.0 - ${f(TONE.WHITES_RANGE)} * u_whites;
+  float black = -${f(TONE.BLACKS_RANGE)} * u_blacks;
+  g = (g - black) / max(white - black, 1e-4);
+  g = max(g, vec3(0.0));
+  if (u_contrast != 0.0) {
+    float c = u_contrast >= 0.0 ? 1.0 + u_contrast : 1.0 / (1.0 - u_contrast);
+    g = ${f(TONE.PIVOT)} * pow(g / ${f(TONE.PIVOT)}, vec3(c));
+  }
+  vec3 gd = srgbEncode(clamp(g, 0.0, 1.0));
+  if (u_hasCurve == 1) gd = applyCurve(gd);
+  // dramatic curve (the "curve adjustment layer"): gain sigmoid
+  // xᵃ/(xᵃ+(1-x)ᵃ) crushes the blurred shadows and blows the brights
+  vec3 gain = pow(gd, vec3(${f(EFFECTS.GLOW_DRAMA)}));
+  gd = gain / (gain + pow(1.0 - gd, vec3(${f(EFFECTS.GLOW_DRAMA)})));
+  // screen self-blend: extra layer brightness, scaled by GLOW BRIGHTNESS
+  gd = mix(gd, 1.0 - (1.0 - gd) * (1.0 - gd), u_glowBrightness);
+  float a = u_glowAmount * ${f(EFFECTS.GLOW_OPACITY_MAX)};
+  return mix(display, gd, a);
 }
 
 // --- shared display-referred effects (grain / noise / invert) -----------
@@ -836,6 +880,13 @@ void main() {
   // 8.5 tone curve on the display-referred result — mirrors the
   // applyCurveLut() call in toneMapRows (tone-math.js)
   if (u_hasCurve == 1) display = applyCurve(display);
+
+  // 8.7 GLOW (Orton): the blurred, brightened copy soft-lit over the
+  // display result — same position as the glow step in toneMapRows. Gated
+  // on the aux upload; until the plane lands the slider is a no-op.
+  if (u_glowAmount > 0.0 && u_hasAux == 1) {
+    display = applyGlow(display, texture(u_glowT, suv).rgb);
+  }
 
   // EFFECTS: grain / chromatic noise / photo-negative invert on the final
   // display-referred RGB — inlined identically to the post-step in

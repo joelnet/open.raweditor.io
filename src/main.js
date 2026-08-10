@@ -83,6 +83,10 @@ let detailToken = 0;
 /** Preview pixels kept for image statistics (auto WB / auto tone). */
 /** @type {{ pixels: Uint16Array, width: number, height: number } | null} */
 let previewImage = null;
+/** GLOW plane kept for the export — the very buffer the preview uploaded,
+ * so the exported glow is identical (see toneMapRows). */
+/** @type {{ data: Float32Array, w: number, h: number } | null} */
+let currentGlow = null;
 let opening = false;
 let autosaveReady = false;
 let autosaveTimer = 0;
@@ -323,11 +327,13 @@ async function openFile(file) {
     // Presence (texture/clarity/dehaze) aux planes compute off-thread;
     // the sliders take effect as soon as they land.
     const token = ++spatialToken;
+    currentGlow = null; // the previous image's glow must not leak into exports
     spatial
       .analyze(preview)
       .then((aux) => {
         if (token !== spatialToken || !renderer) return;
         renderer.setAux(aux);
+        currentGlow = aux.glow;
         queueRender();
       })
       .catch((err) => console.error("presence analysis failed:", err));
@@ -427,6 +433,7 @@ async function onExport(opts) {
       geometry,
       previewSize?.width ?? 0,
       { width, height },
+      currentGlow,
       (done, total) => {
         const ratio = total > 0 ? done / total : 0;
         status.setProgress(

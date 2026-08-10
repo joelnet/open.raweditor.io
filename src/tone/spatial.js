@@ -634,13 +634,11 @@ function sourceToFrame(g, sx, sy, srcW, srcH) {
  * @param {(i: number, c: number) => number} sample linear value of
  *   channel c at source index i
  * @param {number} width @param {number} height source dims
+ * @param {number} maxEdge long edge of the analysis buffer
  * @returns {LowResRgb}
  */
-function downsampleRgb(sample, width, height) {
-  const factor = Math.max(
-    1,
-    Math.ceil(Math.max(width, height) / SPATIAL.DEHAZE_MAX_EDGE),
-  );
+function downsampleRgb(sample, width, height, maxEdge) {
+  const factor = Math.max(1, Math.ceil(Math.max(width, height) / maxEdge));
   const w = Math.ceil(width / factor);
   const h = Math.ceil(height / factor);
   const r = new Float32Array(w * h);
@@ -675,28 +673,40 @@ function downsampleRgb(sample, width, height) {
 /**
  * @param {Uint16Array} pixels RGBA u16 preview
  * @param {number} width @param {number} height
+ * @param {number} [maxEdge]
  * @returns {LowResRgb}
  */
-export function downsampleRgbFromRgba16(pixels, width, height) {
+export function downsampleRgbFromRgba16(
+  pixels,
+  width,
+  height,
+  maxEdge = SPATIAL.DEHAZE_MAX_EDGE,
+) {
   return downsampleRgb(
     (i, c) => decodeInput(pixels[i * 4 + c] / 65535),
     width,
     height,
+    maxEdge,
   );
 }
 
 /**
  * @param {{ data: Uint16Array | Uint8Array, width: number, height: number,
  *           colors: number, bits: number }} image
+ * @param {number} [maxEdge]
  * @returns {LowResRgb}
  */
-export function downsampleRgbFromImage(image) {
+export function downsampleRgbFromImage(
+  image,
+  maxEdge = SPATIAL.DEHAZE_MAX_EDGE,
+) {
   const { data, width, height, colors, bits } = image;
   const maxVal = bits === 16 ? 65535 : 255;
   return downsampleRgb(
     (i, c) => decodeInput(data[i * colors + c] / maxVal),
     width,
     height,
+    maxEdge,
   );
 }
 
@@ -973,6 +983,36 @@ export function computeDehazePlane(aux, luma, w, h) {
     }
   }
   return out;
+}
+
+// --- glow (Orton) plane, low resolution ---------------------------------
+
+/**
+ * Glow plane for the EFFECTS GLOW sliders: one small, packed RGBA blurred
+ * copy of the linear image (a = 1, reserved). Blur σ is frame-relative
+ * (GLOW_SIGMA_FRAC × the buffer long edge), so the physical glow radius
+ * tracks the frame at any source resolution, and the buffer is small
+ * enough that the preview and the export share this very plane — the
+ * shader samples it as an RGBA16F LINEAR texture, toneMapRows through
+ * sampleGlow() (tone-math.js). Content above σ is gone by construction,
+ * so bilinear magnification back to full res is visually lossless.
+ * @param {LowResRgb} low
+ * @returns {{ data: Float32Array, w: number, h: number }}
+ */
+export function computeGlowPlane(low) {
+  const { r, g, b, w, h } = low;
+  const n = w * h;
+  const kernel = gaussianKernel(SPATIAL.GLOW_SIGMA_FRAC * Math.max(w, h));
+  const tmp = new Float32Array(n);
+  const dst = new Float32Array(n);
+  const data = new Float32Array(n * 4);
+  const planes = [r, g, b];
+  for (let c = 0; c < 3; c++) {
+    gaussianBlur(planes[c], dst, tmp, w, h, kernel);
+    for (let i = 0; i < n; i++) data[i * 4 + c] = dst[i];
+  }
+  for (let i = 0; i < n; i++) data[i * 4 + 3] = 1;
+  return { data, w, h };
 }
 
 // --- export pre-pass -----------------------------------------------------

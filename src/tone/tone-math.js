@@ -55,6 +55,7 @@ import {
  *             gradeBalance: number,
  *             invert: number, grainAmount: number, grainSize: number,
  *             grainMidtones: number, noise: number,
+ *             glowAmount: number, glowBrightness: number,
  *             lumaNoise: number, colorNoise: number, noiseDetail: number,
  *             curve: import("./curve.js").ToneCurve, curveSat: number,
  *             masks: readonly import("./mask-math.js").MaskGroup[]
@@ -122,6 +123,10 @@ export const ZERO_SETTINGS = Object.freeze({
   // when Amount > 0, so this stays an identity setting
   grainMidtones: 1,
   noise: 0,
+  glowAmount: 0,
+  // glow brightness default 50 (half screen-boost) — only shapes the glow
+  // layer when Amount > 0, so this stays an identity setting
+  glowBrightness: 0.5,
   // NOISE REDUCTION: off by default. noiseDetail sits at 0.5 (UI 50, the
   // Lightroom default) but only matters when lumaNoise > 0, so this stays an
   // identity setting.
@@ -447,6 +452,116 @@ export function applyDisplayEffects(r, g, b, s, u, v, fw, fh) {
     b = 1 - b;
   }
   return [r, g, b];
+}
+
+// --- GLOW (Orton effect) -------------------------------------------------
+
+/**
+ * Bilinear sample of the packed glow plane (spatial.js computeGlowPlane)
+ * at a normalized source UV — the CPU counterpart of the shader's LINEAR
+ * fetch of u_glowT (same pixel-center convention and edge clamp as
+ * dehazeAmount() in spatial.js).
+ * @param {{ data: Float32Array, w: number, h: number }} glow
+ * @param {number} u normalized x (pixel center / width)
+ * @param {number} v normalized y
+ * @returns {[number, number, number]} blurred linear RGB
+ */
+export function sampleGlow(glow, u, v) {
+  const { data, w, h } = glow;
+  const fx = Math.min(Math.max(u * w - 0.5, 0), w - 1);
+  const fy = Math.min(Math.max(v * h - 0.5, 0), h - 1);
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const x1 = Math.min(x0 + 1, w - 1);
+  const y1 = Math.min(y0 + 1, h - 1);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const w00 = (1 - tx) * (1 - ty);
+  const w10 = tx * (1 - ty);
+  const w01 = (1 - tx) * ty;
+  const w11 = tx * ty;
+  const i00 = (y0 * w + x0) * 4;
+  const i10 = (y0 * w + x1) * 4;
+  const i01 = (y1 * w + x0) * 4;
+  const i11 = (y1 * w + x1) * 4;
+  return [
+    data[i00] * w00 + data[i10] * w10 + data[i01] * w01 + data[i11] * w11,
+    data[i00 + 1] * w00 +
+      data[i10 + 1] * w10 +
+      data[i01 + 1] * w01 +
+      data[i11 + 1] * w11,
+    data[i00 + 2] * w00 +
+      data[i10 + 2] * w10 +
+      data[i01 + 2] * w01 +
+      data[i11 + 2] * w11,
+  ];
+}
+
+/**
+ * GLOW (Orton effect), the classic Photoshop recipe: push the blurred
+ * glow sample through the cheap global subset of the tone chain (WB →
+ * exposure → whites/blacks → contrast → sRGB encode → tone curve) so the
+ * glow follows the edit, apply a dramatic S-curve (crushes the blurred
+ * shadows so the mix adds density, not haze), screen-boost by GLOW
+ * BRIGHTNESS, then blend normally over the display-referred pixel by
+ * GLOW AMOUNT. Highlights/shadows, masks and the color stages are
+ * skipped on the glow layer on purpose — it is low-frequency and blended
+ * at low opacity; WB and exposure are what must not mismatch. Mirrors
+ * applyGlow() in gl/shaders.js.
+ * @param {number} dr @param {number} dg @param {number} db display-referred
+ *   sRGB pixel [0,1] (after the tone curve, before the display effects)
+ * @param {number} gr @param {number} gg @param {number} gb glow sample,
+ *   linear light (sampleGlow)
+ * @param {ToneSettings} s
+ * @param {ReturnType<typeof buildCurveLut> | null} curveLut baked LUT for
+ *   s.curve, null for an identity curve
+ * @returns {[number, number, number]}
+ */
+export function applyGlow(dr, dg, db, gr, gg, gb, s, curveLut) {
+  // steps 1-4 of applyTonePixel on the glow layer
+  if (s.temp !== 0 || s.tint !== 0) {
+    gr *= Math.pow(2, TONE.WB_TEMP_EV * s.temp);
+    gb *= Math.pow(2, -TONE.WB_TEMP_EV * s.temp);
+    gg *= Math.pow(2, -TONE.WB_TINT_EV * s.tint);
+  }
+  const m = Math.pow(2, s.exposure);
+  gr *= m;
+  gg *= m;
+  gb *= m;
+  const white = 1 - TONE.WHITES_RANGE * s.whites;
+  const black = -TONE.BLACKS_RANGE * s.blacks;
+  const range = Math.max(white - black, 1e-4);
+  gr = Math.max((gr - black) / range, 0);
+  gg = Math.max((gg - black) / range, 0);
+  gb = Math.max((gb - black) / range, 0);
+  if (s.contrast !== 0) {
+    const c = s.contrast >= 0 ? 1 + s.contrast : 1 / (1 - s.contrast);
+    gr = TONE.PIVOT * Math.pow(gr / TONE.PIVOT, c);
+    gg = TONE.PIVOT * Math.pow(gg / TONE.PIVOT, c);
+    gb = TONE.PIVOT * Math.pow(gb / TONE.PIVOT, c);
+  }
+  gr = srgbEncode(Math.min(Math.max(gr, 0), 1));
+  gg = srgbEncode(Math.min(Math.max(gg, 0), 1));
+  gb = srgbEncode(Math.min(Math.max(gb, 0), 1));
+  if (curveLut) {
+    [gr, gg, gb] = applyCurveLut(curveLut, s.curveSat, gr, gg, gb);
+  }
+  // dramatic curve (the "curve adjustment layer"): gain sigmoid
+  // xᵃ/(xᵃ+(1-x)ᵃ) crushes the blurred shadows and blows the brights
+  const dm = EFFECTS.GLOW_DRAMA;
+  const gainR = Math.pow(gr, dm);
+  const gainG = Math.pow(gg, dm);
+  const gainB = Math.pow(gb, dm);
+  gr = gainR / (gainR + Math.pow(1 - gr, dm));
+  gg = gainG / (gainG + Math.pow(1 - gg, dm));
+  gb = gainB / (gainB + Math.pow(1 - gb, dm));
+  // screen self-blend (mix(g, 1-(1-g)², B) = g + B·g·(1-g)): extra layer
+  // brightness, scaled by GLOW BRIGHTNESS
+  gr += s.glowBrightness * gr * (1 - gr);
+  gg += s.glowBrightness * gg * (1 - gg);
+  gb += s.glowBrightness * gb * (1 - gb);
+  const a = s.glowAmount * EFFECTS.GLOW_OPACITY_MAX;
+  return [dr + (gr - dr) * a, dg + (gg - dg) * a, db + (gb - db) * a];
 }
 
 /**
@@ -870,6 +985,10 @@ export function cropPixelRect(crop, width, height) {
  * @param {{ x: number, y: number, w: number, h: number }} [rect] pixel
  *   crop on the frame grid; defaults to the full frame
  * @param {import("./geometry.js").Geometry} [geometry]
+ * @param {{ data: Float32Array, w: number, h: number } | null} [glow]
+ *   packed glow plane (spatial.js computeGlowPlane) — the very buffer the
+ *   preview uploaded, so the exported glow is identical; null disables
+ *   GLOW (the sliders become a no-op, matching the shader's u_hasAux gate)
  */
 export function toneMapRows(
   image,
@@ -879,6 +998,7 @@ export function toneMapRows(
   rowEnd,
   rect,
   geometry = ZERO_GEOMETRY,
+  glow = null,
 ) {
   const { data, width, height, colors, bits } = image;
   const identity = isIdentityGeometry(geometry);
@@ -904,6 +1024,7 @@ export function toneMapRows(
   const curveLut = isIdentityCurve(settings.curve)
     ? null
     : buildCurveLut(settings.curve);
+  const glowOn = glow && settings.glowAmount > 0 ? glow : null;
 
   // Straighten transform constants (mirrors frameToSource in geometry.js,
   // inlined to keep the per-pixel path allocation-free).
@@ -957,6 +1078,11 @@ export function toneMapRows(
     for (let x = 0; x < rw; x++) {
       const fx = x + rx + 0.5;
       let r, g, b;
+      // source-px pixel-center position — the glow plane samples by
+      // normalized source UV, mirroring the shader's suv (identity
+      // geometry: frame coords are source coords)
+      let sx = fx;
+      let sy = fy;
       if (identity) {
         r = decodeInput(data[src] / maxVal);
         g = decodeInput(data[src + 1] / maxVal);
@@ -971,10 +1097,20 @@ export function toneMapRows(
           qx = (cosA * px + sinA * py) * inv + fw / 2;
           qy = (-sinA * px + cosA * py) * inv + fh / 2;
         }
-        if (orient === 1) sampleSource(qy, height - qx);
-        else if (orient === 2) sampleSource(width - qx, height - qy);
-        else if (orient === 3) sampleSource(width - qy, qx);
-        else sampleSource(qx, qy);
+        if (orient === 1) {
+          sx = qy;
+          sy = height - qx;
+        } else if (orient === 2) {
+          sx = width - qx;
+          sy = height - qy;
+        } else if (orient === 3) {
+          sx = width - qy;
+          sy = qx;
+        } else {
+          sx = qx;
+          sy = qy;
+        }
+        sampleSource(sx, sy);
         r = sample[0];
         g = sample[1];
         b = sample[2];
@@ -989,6 +1125,12 @@ export function toneMapRows(
       // shader's step 8.5 (before the display effects)
       if (curveLut) {
         [or, og, ob] = applyCurveLut(curveLut, settings.curveSat, or, og, ob);
+      }
+      // GLOW (Orton): the blurred, brightened copy soft-lit over the
+      // display result — same position as the shader's step 8.7
+      if (glowOn) {
+        const [glr, glg, glb] = sampleGlow(glowOn, sx / width, sy / height);
+        [or, og, ob] = applyGlow(or, og, ob, glr, glg, glb, settings, curveLut);
       }
       // Shared display-referred post-step (grain / noise / invert), keyed
       // off frame-normalized coords so it matches the GPU preview at any

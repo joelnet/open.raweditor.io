@@ -20,6 +20,9 @@ export function createExporter() {
      *   presence pre-pass lands on the same frequency bands the preview
      *   showed (0 = unknown, treat full res as scale 1)
      * @param {{ width: number, height: number }} targetSize encoded output size
+     * @param {{ data: Float32Array, w: number, h: number } | null} glow
+     *   packed GLOW plane the preview uploaded (cloned, not transferred —
+     *   exports can repeat); null disables the GLOW sliders
      * @param {(done: number, total: number) => void} [onProgress]
      * @returns {Promise<Blob>}
      */
@@ -31,6 +34,7 @@ export function createExporter() {
       geometry,
       previewWidth,
       targetSize,
+      glow,
       onProgress,
     ) {
       if (!worker) {
@@ -50,7 +54,16 @@ export function createExporter() {
         w.onerror = (e) =>
           reject(new Error(e.message || "export worker error"));
         w.postMessage(
-          { image, settings, format, crop, geometry, previewWidth, targetSize },
+          {
+            image,
+            settings,
+            format,
+            crop,
+            geometry,
+            previewWidth,
+            targetSize,
+            glow,
+          },
           [image.data.buffer],
         );
       });

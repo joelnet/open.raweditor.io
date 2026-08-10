@@ -76,6 +76,7 @@ function resizeRgba(src, srcW, srcH, dstW, dstH) {
 ctx.onmessage = async (/** @type {MessageEvent} */ e) => {
   const { image, settings, format, crop, previewWidth, targetSize } = e.data;
   const geometry = e.data.geometry ?? ZERO_GEOMETRY;
+  const glow = e.data.glow ?? null;
   try {
     // The crop rect lives on the oriented (frame) pixel grid.
     const frame = orientedDims(geometry.orient, image.width, image.height);
@@ -97,7 +98,7 @@ ctx.onmessage = async (/** @type {MessageEvent} */ e) => {
         : new Uint8ClampedArray(rect.w * rect.h * 4);
     for (let y = 0; y < rect.h; y += CHUNK_ROWS) {
       const end = Math.min(y + CHUNK_ROWS, rect.h);
-      toneMapRows(image, settings, out, y, end, rect, geometry);
+      toneMapRows(image, settings, out, y, end, rect, geometry, glow);
       ctx.postMessage({ type: "progress", done: end, total: rect.h });
     }
     const resized = resizeRgba(

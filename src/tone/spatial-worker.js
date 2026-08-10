@@ -12,8 +12,10 @@ import {
   computeChromaDenoiseFromRgba16,
   computeDehazeAux,
   computeDehazePlane,
+  computeGlowPlane,
   downsampleRgbFromRgba16,
 } from "./spatial.js";
+import { SPATIAL } from "./constants.js";
 
 const ctx = /** @type {any} */ (self);
 
@@ -37,6 +39,9 @@ ctx.onmessage = (/** @type {MessageEvent} */ e) => {
       downsampleRgbFromRgba16(pixels, width, height),
     );
     const dehazeD = computeDehazePlane(aux, luma, width, height);
+    const glow = computeGlowPlane(
+      downsampleRgbFromRgba16(pixels, width, height, SPATIAL.GLOW_MAX_EDGE),
+    );
     ctx.postMessage(
       {
         type: "done",
@@ -46,6 +51,7 @@ ctx.onmessage = (/** @type {MessageEvent} */ e) => {
           dehazeD,
           lightBalanceW,
           chroma,
+          glow,
           airlight: aux.airlight,
           width,
           height,
@@ -57,6 +63,7 @@ ctx.onmessage = (/** @type {MessageEvent} */ e) => {
         dehazeD.buffer,
         lightBalanceW.buffer,
         chroma.buffer,
+        glow.data.buffer,
       ],
     );
   } catch (err) {

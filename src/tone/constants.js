@@ -151,6 +151,14 @@ export const SPATIAL = {
   /** Airlight: average the brightest AIR_QUANTILE of the haziest
    *  AIR_QUANTILE of pixels by dark channel (darktable's 95/95). */
   DEHAZE_AIR_QUANTILE: 0.95,
+  /** Long edge of the downscaled buffer the glow (Orton) plane lives on.
+   *  With the frame-relative σ below this keeps the blur ≥ ~2.5 px on the
+   *  buffer grid, safely above the bilinear-upsample artifact floor. */
+  GLOW_MAX_EDGE: 768,
+  /** Glow Gaussian σ as a fraction of the buffer long edge. The classic
+   *  Orton radius scales with image size (~0.5% of the long edge), which a
+   *  fixed-size buffer implements identically at preview and export. */
+  GLOW_SIGMA_FRAC: 0.005,
 };
 
 /**
@@ -297,6 +305,21 @@ export const EFFECTS = {
   NOISE_GRID: 1400,
   /** NOISE +1 perturbs each display channel by ±NOISE_STRENGTH. */
   NOISE_STRENGTH: 0.12,
+  // --- glow (Orton effect): the classic Photoshop recipe — duplicate,
+  // blur, dramatic contrast curve on the blurred copy, blend back at low
+  // opacity (normal mode). The curve is what keeps shadows dense: it
+  // crushes the blurred layer's darks so the mix adds density, not haze,
+  // while bright content blooms outward. (Soft light was tried first and
+  // self-cancels on dark scenes; screen washes the frame out like a
+  // negative dehaze.)
+  /** Blend opacity at GLOW AMOUNT 100; slider 50 ≈ the 25–30% opacity the
+   *  classic advice recommends. */
+  GLOW_OPACITY_MAX: 0.6,
+  /** Exponent of the gain sigmoid xᵃ/(xᵃ+(1-x)ᵃ) on the glow layer —
+   *  the "dramatic curve": 1 = identity, 3 ≈ a hard Photoshop S-curve
+   *  (0.3 → 0.07, 0.7 → 0.93). Per channel, so it also amplifies
+   *  saturation the way steep RGB curves do. */
+  GLOW_DRAMA: 3,
 };
 
 /**
