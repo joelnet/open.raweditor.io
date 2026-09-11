@@ -286,7 +286,7 @@ export const HSL_KEYS = /** @type {readonly SliderKey[]} */ (
  * EFFECTS section sliders: film GRAIN (Amount / Size / Midtones — a port of
  * darktable's grain module: strength / coarseness / midtones-bias), the
  * positive-only NOISE slider (adds chromatic noise; noise *reduction* is its
- * own NOISE REDUCTION section, see NR_SLIDERS), and GLOW (the Orton effect:
+ * own NOISE REDUCTION section, see NR_SLIDERS), and ORTON (a glow effect:
  * a blurred, contrast-crushed copy blended back over the image; the
  * slider sets the blend opacity).
  * The NEGATIVE toggle (photo-negative invert) is a bespoke button, not a
@@ -336,7 +336,7 @@ export const EFFECTS_SLIDERS = /** @type {const} */ ([
   },
   {
     key: "glowAmount",
-    label: "GLOW",
+    label: "ORTON",
     min: 0,
     max: 100,
     step: 1,
